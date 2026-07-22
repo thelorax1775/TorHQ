@@ -57,6 +57,30 @@ chown -R "${TORHQ_USER}:${TORHQ_USER}" "${TORHQ_HOME}" "${ENV_DIR}"
 
 # 6. systemd unit.
 cp "${APP_DIR}/deploy/torhq.service" /etc/systemd/system/torhq.service
+
+# The unit's namespace/mount-based sandboxing (ProtectSystem=strict, PrivateTmp,
+# PrivateDevices, Protect*, RestrictNamespaces) requires privileges an
+# unprivileged LXC doesn't grant, so the service would fail to start there with
+# status=226/NAMESPACE. Inside a container, drop in an override that relaxes only
+# those directives — the container itself is the isolation boundary. seccomp/prctl
+# based hardening (NoNewPrivileges, RestrictAddressFamilies, LockPersonality)
+# still applies.
+if systemd-detect-virt --container --quiet 2>/dev/null; then
+  echo "==> Container detected — relaxing namespace-based systemd sandboxing"
+  mkdir -p /etc/systemd/system/torhq.service.d
+  cat > /etc/systemd/system/torhq.service.d/10-lxc.conf <<'EOF'
+[Service]
+ProtectSystem=false
+ProtectHome=false
+PrivateTmp=false
+PrivateDevices=false
+ProtectKernelTunables=false
+ProtectKernelModules=false
+ProtectControlGroups=false
+RestrictNamespaces=false
+EOF
+fi
+
 systemctl daemon-reload
 systemctl enable torhq
 systemctl restart torhq
