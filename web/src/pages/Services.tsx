@@ -6,13 +6,27 @@ const DEFAULTS: Record<string, string> = {
   sonarr: "http://127.0.0.1:8989", lidarr: "http://127.0.0.1:8686",
   prowlarr: "http://127.0.0.1:9696", slskd: "http://127.0.0.1:5030",
   jellyfin: "http://127.0.0.1:8096", navidrome: "http://127.0.0.1:4533",
-  kavita: "http://127.0.0.1:5000",
+  kavita: "http://127.0.0.1:5000", torrentsearch: "https://",
 };
 const SECRET_HINT: Record<string, string> = {
   qbittorrent: "username:password", navidrome: "username:password", slskd: "API key",
   radarr: "API key", sonarr: "API key", lidarr: "API key", prowlarr: "API key",
-  jellyfin: "API token", kavita: "API key",
+  jellyfin: "API token", kavita: "API key", torrentsearch: "not required",
 };
+
+// Torrent-search "extra" knobs. Placeholders show the KAT-style defaults used
+// when a field is left blank — override per mirror.
+const TS_FIELDS: Array<{ key: string; label: string; placeholder: string }> = [
+  { key: "searchPath", label: "Search path template", placeholder: "/usearch/{query}/{page}/" },
+  { key: "rowSelector", label: "Result row selector", placeholder: "table.data tr.odd, table.data tr.even" },
+  { key: "titleSelector", label: "Title selector", placeholder: "a.cellMainLink" },
+  { key: "magnetSelector", label: "Magnet link selector", placeholder: "a[href^='magnet:']" },
+  { key: "seedersSelector", label: "Seeders selector", placeholder: "td.green.center" },
+  { key: "leechersSelector", label: "Leechers selector", placeholder: "td.red.center" },
+  { key: "sizeSelector", label: "Size selector", placeholder: "td.nobr.center" },
+  { key: "detailLinkSelector", label: "Detail-link selector", placeholder: "a.cellMainLink" },
+  { key: "flaresolverrUrl", label: "FlareSolverr URL (optional, clears Cloudflare)", placeholder: "http://127.0.0.1:8191" },
+];
 
 export function Services() {
   const [data, setData] = useState<any>(null);
@@ -23,6 +37,8 @@ export function Services() {
   const [libraryId, setLibraryId] = useState("");
   const [webhookToken, setWebhookToken] = useState("");
   const [webhookTokenSet, setWebhookTokenSet] = useState(false);
+  const [ts, setTs] = useState<Record<string, string>>({});
+  const [tsMagnetDetail, setTsMagnetDetail] = useState(false);
   const [test, setTest] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -33,11 +49,19 @@ export function Services() {
     setBaseUrl(svc?.baseUrl ?? DEFAULTS[sel] ?? ""); setSecret(""); setTest(null);
     setLibraryId(svc?.extra?.libraryId != null ? String(svc.extra.libraryId) : "");
     setWebhookToken(""); setWebhookTokenSet(!!svc?.extra?.webhookTokenSet);
+    const ex = svc?.extra ?? {};
+    setTs(Object.fromEntries(TS_FIELDS.map((f) => [f.key, ex[f.key] != null ? String(ex[f.key]) : ""])));
+    setTsMagnetDetail(!!ex.magnetOnDetailPage);
   }, [sel, data]);
 
   function buildExtra(): Record<string, unknown> | undefined {
     if (sel === "kavita") return { libraryId: libraryId === "" ? undefined : Number(libraryId) };
     if (sel === "slskd") return webhookToken ? { webhookToken } : {};
+    if (sel === "torrentsearch") {
+      const out: Record<string, unknown> = { magnetOnDetailPage: tsMagnetDetail };
+      for (const f of TS_FIELDS) if (ts[f.key]?.trim()) out[f.key] = ts[f.key]!.trim();
+      return out;
+    }
     return undefined;
   }
 
@@ -95,6 +119,27 @@ export function Services() {
             <label>Webhook token {webhookTokenSet ? "(set — leave blank to keep)" : "(enables the completed-download webhook)"}</label>
             <input type="password" value={webhookToken} onChange={(e) => setWebhookToken(e.target.value)}
               placeholder={webhookTokenSet ? "••••••••" : "shared secret for X-TorHQ-Token"} />
+          </>
+        )}
+        {sel === "torrentsearch" && (
+          <>
+            <p className="muted small" style={{ marginTop: 8 }}>
+              Point Base URL at a torrent-index mirror (e.g. a KickassTorrents proxy). Leave the
+              fields below blank to use the built-in KAT-style defaults shown as placeholders — only
+              override them if a mirror's markup differs. These sites rot and change often.
+            </p>
+            {TS_FIELDS.map((f) => (
+              <div key={f.key}>
+                <label>{f.label}</label>
+                <input value={ts[f.key] ?? ""} placeholder={f.placeholder}
+                  onChange={(e) => setTs((s) => ({ ...s, [f.key]: e.target.value }))} />
+              </div>
+            ))}
+            <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
+              <input type="checkbox" style={{ width: "auto" }} checked={tsMagnetDetail}
+                onChange={(e) => setTsMagnetDetail(e.target.checked)} />
+              Magnets are on each result's detail page (not the search results page)
+            </label>
           </>
         )}
 

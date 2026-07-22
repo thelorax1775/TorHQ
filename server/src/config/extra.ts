@@ -18,9 +18,26 @@ const SlskdExtra = z.object({
   webhookToken: z.string().min(8).max(256).optional(),
 });
 
+// Torrent-index scraper: all site-specific knobs so a rotting mirror can be
+// re-pointed without a code change. Empty/omitted fields fall back to the
+// adapter's KAT-style defaults. `flaresolverrUrl` is optional Cloudflare bypass.
+const TorrentSearchExtra = z.object({
+  searchPath: z.string().max(256).optional(),
+  rowSelector: z.string().max(256).optional(),
+  titleSelector: z.string().max(256).optional(),
+  magnetSelector: z.string().max(256).optional(),
+  seedersSelector: z.string().max(256).optional(),
+  leechersSelector: z.string().max(256).optional(),
+  sizeSelector: z.string().max(256).optional(),
+  detailLinkSelector: z.string().max(256).optional(),
+  magnetOnDetailPage: z.coerce.boolean().optional(),
+  flaresolverrUrl: z.string().url().max(512).optional(),
+});
+
 const EXTRA_SCHEMAS: Partial<Record<string, z.ZodTypeAny>> = {
   kavita: KavitaExtra,
   slskd: SlskdExtra,
+  torrentsearch: TorrentSearchExtra,
 };
 
 /** Fields that are secret/write-only per kind (never sent to the browser). */

@@ -81,7 +81,7 @@ export const openApiDoc = {
         properties: {
           kind: {
             type: "string",
-            enum: ["qbittorrent", "radarr", "sonarr", "lidarr", "prowlarr", "slskd", "jellyfin", "navidrome", "kavita"],
+            enum: ["qbittorrent", "radarr", "sonarr", "lidarr", "prowlarr", "slskd", "jellyfin", "navidrome", "kavita", "torrentsearch"],
           },
           label: { type: "string", minLength: 1, maxLength: 64 },
           baseUrl: { type: "string", format: "uri" },
@@ -89,7 +89,10 @@ export const openApiDoc = {
           enabled: { type: "boolean" },
           extra: {
             type: "object",
-            description: "Typed per-kind config. kavita: { libraryId }. slskd: { webhookToken } (write-only).",
+            description:
+              "Typed per-kind config. kavita: { libraryId }. slskd: { webhookToken } (write-only). " +
+              "torrentsearch: { searchPath, rowSelector, titleSelector, magnetSelector, seedersSelector, " +
+              "leechersSelector, sizeSelector, detailLinkSelector, magnetOnDetailPage, flaresolverrUrl }.",
           },
         },
       },
@@ -196,6 +199,31 @@ export const openApiDoc = {
           lastError: { type: ["string", "null"] },
           createdAt: { type: "integer" },
           updatedAt: { type: "integer" },
+        },
+      },
+      TorrentResult: {
+        type: "object",
+        description: "A normalized magnet result scraped from the configured torrent site.",
+        properties: {
+          title: { type: "string" },
+          magnet: { type: "string", description: "magnet: URI." },
+          seeders: { type: ["integer", "null"] },
+          leechers: { type: ["integer", "null"] },
+          sizeBytes: { type: ["integer", "null"] },
+          detailUrl: { type: ["string", "null"], description: "Same-origin detail page link, if any." },
+        },
+      },
+      GrabInput: {
+        type: "object",
+        required: ["magnet"],
+        properties: {
+          magnet: { type: "string", description: "A well-formed magnet:?xt=urn:btih:<hash> link. Non-magnet URLs are rejected." },
+          title: { type: "string", maxLength: 512 },
+          category: {
+            type: "string",
+            enum: ["torhq-manual", "radarr", "sonarr", "lidarr"],
+            description: "qBittorrent category. Defaults to torhq-manual; an *arr category lets that *arr adopt the download.",
+          },
         },
       },
       SlskdWebhook: {
@@ -322,6 +350,38 @@ export const openApiDoc = {
           "400": errorResponse("validation / missing metadataProfileId for music"),
           "409": errorResponse("service not configured"),
           "502": errorResponse("upstream error / selection unavailable"),
+        },
+      },
+    },
+    "/api/search": {
+      get: {
+        summary: "Search the configured torrent site for magnets (read-only)",
+        parameters: [
+          { name: "q", in: "query", required: true, schema: { type: "string", minLength: 1, maxLength: 256 } },
+          { name: "page", in: "query", schema: { type: "integer", minimum: 1, maximum: 20 } },
+        ],
+        responses: {
+          "200": { description: "OK", content: { "application/json": { schema: { type: "object", properties: {
+            results: { type: "array", items: { $ref: "#/components/schemas/TorrentResult" } },
+          } } } } },
+          "409": errorResponse("torrent search not configured"),
+          "502": errorResponse("site unreachable / blocked (e.g. Cloudflare)"),
+        },
+      },
+    },
+    "/api/search/grab": {
+      post: {
+        summary: "Send a chosen magnet straight to qBittorrent",
+        security: [{ cookieAuth: [], csrfToken: [] }],
+        parameters: [csrfHeader],
+        requestBody: jsonBody("GrabInput"),
+        responses: {
+          "200": { description: "Grabbed", content: { "application/json": { schema: { type: "object", properties: {
+            ok: { type: "boolean" }, category: { type: "string" },
+          } } } } },
+          "400": errorResponse("invalid magnet / category"),
+          "409": errorResponse("qBittorrent not configured"),
+          "502": errorResponse("qBittorrent rejected/unreachable"),
         },
       },
     },

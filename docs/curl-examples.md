@@ -84,6 +84,36 @@ curl -s -b $JAR -X POST $BASE/api/requests/music \
   -d '{"term":"Radiohead","selectionId":"mbid:a74b1b7f-71a5-4011-9441-d0b5e4122711","qualityProfileId":1,"metadataProfileId":1,"rootFolderPath":"/data/music","searchNow":true}'
 ```
 
+## 4b. Torrent search → qBittorrent
+
+Configure a `torrentsearch` service (base URL = a torrent-index mirror) and
+qBittorrent, then search and grab. `/api/search` is read-only; `/api/search/grab`
+mutates (needs the CSRF header). Only `magnet:` links are accepted, and `category`
+is one of `torhq-manual` (default), `radarr`, `sonarr`, `lidarr`.
+
+```bash
+# Configure the torrent-search site (selectors default to a KAT-style layout;
+# override any of them, and optionally add a FlareSolverr URL, via extra):
+curl -s -b $JAR -X POST $BASE/api/services \
+  -H "x-csrf-token: $CSRF" -H 'content-type: application/json' \
+  -d '{"kind":"torrentsearch","label":"KAT","baseUrl":"https://your-kat-mirror.example","extra":{"flaresolverrUrl":"http://127.0.0.1:8191"}}'
+
+# Search (strongest-seeded first):
+curl -s -b $JAR "$BASE/api/search?q=Blade%20Runner%202049%202160p" | jq
+#   -> { "results": [ { "title": "...", "magnet": "magnet:?xt=urn:btih:...", "seeders": 1234, ... } ] }
+
+# Grab a chosen magnet straight into qBittorrent (raw, torhq-manual category):
+curl -s -b $JAR -X POST $BASE/api/search/grab \
+  -H "x-csrf-token: $CSRF" -H 'content-type: application/json' \
+  -d '{"magnet":"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567","title":"Blade Runner 2049"}'
+
+# Or tag it for Radarr to adopt and import (requires qB wired as Radarr's client
+# with a matching "radarr" category):
+curl -s -b $JAR -X POST $BASE/api/search/grab \
+  -H "x-csrf-token: $CSRF" -H 'content-type: application/json' \
+  -d '{"magnet":"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567","category":"radarr"}'
+```
+
 ## 5. Manual intake (books/manga -> Kavita, music -> Navidrome)
 
 ```bash

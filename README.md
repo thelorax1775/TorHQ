@@ -6,8 +6,14 @@ Sonarr, Lidarr, Prowlarr, qBittorrent, slskd, Jellyfin, Navidrome, and Kavita �
 plus a small, deliberately-scoped **manual intake** pipeline for content those
 tools don't manage (loose books, manga, and Soulseek music).
 
+It also includes a **torrent-search widget**: search a torrent-index site (e.g. a
+KickassTorrents mirror) from inside TorHQ and send a chosen magnet straight to
+qBittorrent — either as a raw grab you own, or tagged with an \*arr's category so
+that \*arr adopts and imports it.
+
 TorHQ is built to sit quietly next to your existing stack. It **observes and
-requests**; it does not take over.
+requests**, and performs only explicit, user-initiated grabs — it does not take
+over your \*arr apps' pipelines.
 
 > **The core boundary.** TorHQ **never moves, renames, or reorganizes media owned
 > by the \*arr applications.** Radarr/Sonarr/Lidarr own search, grab, import,
@@ -39,6 +45,7 @@ requests**; it does not take over.
 | --- | --- |
 | **Dashboard** | Aggregated service health, qBittorrent downloads grouped by category, \*arr activity (history + wanted/missing), slskd downloads, storage usage, and failed-import surfacing. |
 | **Requests** | Search Radarr/Sonarr/Lidarr, **choose the intended result**, and submit an add+search request. TorHQ asks; the \*arr does the work. |
+| **Torrent search** | Search a configurable torrent-index site and **send a chosen magnet straight to qBittorrent** — into a neutral `torhq-manual` category, or tagged `radarr`/`sonarr`/`lidarr` so that \*arr adopts and imports it. |
 | **Manual intake** | Preview and then atomically import a completed file/folder into a **Kavita** (books/manga/comics) or **Navidrome** (music) library, then trigger a rescan. Durable, idempotent, retried. |
 | **slskd webhook** | Completed Soulseek downloads are pushed to `/webhooks/slskd` (shared-token auth) and enqueued as intake jobs into a music library. |
 | **Services** | Encrypted-at-rest credential storage with a connection tester. Secrets are never returned to the browser. |
@@ -126,6 +133,48 @@ previewed, approved import.
 
 ---
 
+## Torrent search & grab
+
+The **Search** page searches a torrent-index site and lets you push a chosen
+magnet straight to qBittorrent. It is intentionally simple and explicit:
+
+1. Configure a **`torrentsearch`** service (Services page) — a base URL pointing at
+   a torrent-index mirror (e.g. a KickassTorrents proxy). Then configure
+   **qBittorrent**, which is where grabs are sent.
+2. Search a term. TorHQ scrapes the results and shows title, size, and
+   seeders/leechers, strongest-seeded first.
+3. Click a **Send to** button per result:
+   - **qBittorrent** — grabs into a neutral `torhq-manual` category (a raw
+     download you own and organize yourself).
+   - **Radarr / Sonarr / Lidarr** — grabs into that \*arr's category so, if you
+     have qBittorrent wired as that \*arr's download client with that category,
+     the \*arr adopts and imports the download. (TorHQ still only writes to
+     qBittorrent — it never touches \*arr files.)
+
+Only well-formed `magnet:?xt=urn:btih:<hash>` links are accepted, and the grab
+category is restricted to a fixed allowlist.
+
+### Configuring a mirror (and why it's fragile)
+
+Public torrent-index mirrors rot constantly — domains change, markup drifts, and
+many sit behind Cloudflare. So the scraper is **fully configuration-driven**: the
+`torrentsearch` service's *extra* config holds the search-path template and a CSS
+selector for each field (row, title, magnet, seeders, leechers, size, detail
+link), plus a `magnetOnDetailPage` toggle. Blank fields fall back to built-in
+KickassTorrents-style defaults. When a mirror changes, **re-point the base URL or
+adjust a selector — no code change needed**.
+
+If a mirror is behind a Cloudflare browser challenge, a plain server-side fetch
+gets blocked; TorHQ surfaces a clear error rather than failing silently. Set an
+optional **FlareSolverr URL** in the same config to route fetches through
+[FlareSolverr](https://github.com/FlareSolverr/FlareSolverr) and clear the
+challenge.
+
+> For a more robust, long-lived setup, prefer Prowlarr + the \*arr apps for search
+> and grabbing. This widget is a convenience for ad-hoc, manual grabs.
+
+---
+
 ## Local development
 
 Requires **Node 20+** (22 works). `better-sqlite3` is a native module, so a C
@@ -199,12 +248,15 @@ database — never in env, never in git. See [`.env.example`](.env.example).
    - Jellyfin — API token
    - Navidrome — `username:password`
    - Kavita — API key (optionally set a **library ID** to trigger explicit scans)
+   - torrentsearch — no secret; set the base URL to a torrent-index mirror and,
+     if needed, override the site-profile selectors / add a FlareSolverr URL
 3. **Define intake libraries.** On the **Libraries** page, create Kavita/Navidrome
    destinations. Both the destination and staging paths must live inside an
    approved root and, for atomic imports, on the same filesystem.
 4. **(Optional) qBittorrent categories.** To keep ownership clear, create
-   categories in qBittorrent such as `radarr`, `sonarr`, `lidarr`, and
-   `torhq-music` so downloads are attributed correctly on the dashboard.
+   categories in qBittorrent such as `radarr`, `sonarr`, `lidarr`, `torhq-music`,
+   and `torhq-manual` (used by the torrent-search widget's raw grabs) so downloads
+   are attributed correctly on the dashboard.
 
 A scripted walkthrough of every endpoint is in [`docs/curl-examples.md`](docs/curl-examples.md).
 
