@@ -37,18 +37,16 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   });
 
   await app.register(cookie);
-  // Global rate limit; tighter limits applied to auth/sensitive routes below.
+  // Global rate limit. The strict brute-force budget is applied per-route (see
+  // authRoutes) rather than to a whole scope, so that read-only endpoints the
+  // SPA polls -- notably GET /api/auth/me -- cannot exhaust the login budget
+  // and lock a legitimate user out of signing in.
   await app.register(rateLimit, { max: 300, timeWindow: "1 minute" });
   await authPlugin(app); // call directly so decorators apply to the root instance
 
-  // Stricter limiter for auth + webhook via a scoped register.
-  await app.register(async (scoped) => {
-    await scoped.register(rateLimit, { max: 10, timeWindow: "1 minute" });
-    authRoutes(scoped, ctx);
-    webhookRoutes(scoped, ctx);
-  });
-
-  // Authenticated + general routes.
+  // Routes. Credential endpoints carry their own tight per-route limit.
+  authRoutes(app, ctx);
+  webhookRoutes(app, ctx);
   setupRoutes(app, ctx);
   requestRoutes(app, ctx);
   searchRoutes(app, ctx);

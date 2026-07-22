@@ -12,6 +12,14 @@ const Credentials = z.object({
 });
 
 export function authRoutes(app: FastifyInstance, ctx: AppContext): void {
+  // Tight budget for endpoints that accept credentials, to blunt brute force.
+  // Deliberately NOT applied to /api/auth/me or /api/auth/logout: those are
+  // driven by the SPA on every page load, and sharing a bucket with login meant
+  // a handful of refreshes returned 429 and locked the user out of signing in.
+  const credentialLimit = {
+    config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+  };
+
   const cookieOpts = {
     httpOnly: true,
     // Lax (not Strict) so the session cookie is reliably stored and sent by
@@ -24,7 +32,7 @@ export function authRoutes(app: FastifyInstance, ctx: AppContext): void {
   };
 
   // First-run: create the single admin account. Disabled once one exists.
-  app.post("/api/auth/register", async (req, reply) => {
+  app.post("/api/auth/register", credentialLimit, async (req, reply) => {
     if (adminExists()) return reply.code(409).send({ error: "admin already exists" });
     const body = Credentials.parse(req.body);
     const user = await createAdmin(body.username, body.password);
@@ -33,7 +41,7 @@ export function authRoutes(app: FastifyInstance, ctx: AppContext): void {
     return { username: user.username, csrfToken: s.csrfToken };
   });
 
-  app.post("/api/auth/login", async (req, reply) => {
+  app.post("/api/auth/login", credentialLimit, async (req, reply) => {
     const body = Credentials.parse(req.body);
     const user = await authenticate(body.username, body.password);
     if (!user) return reply.code(401).send({ error: "invalid credentials" });
