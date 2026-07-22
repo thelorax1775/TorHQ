@@ -340,6 +340,43 @@ TORHQ_NET=192.168.1.50/24 TORHQ_GW=192.168.1.1 TORHQ_RAM=4096 TORHQ_DISK=16 \
 >   bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/TorHQ/claude/arr-stack-integration-9jtos4/scripts/proxmox-install.sh)"
 > ```
 
+### Mounting NFS/SMB shares (NAS storage for downloads)
+
+To store downloads on a NAS, mount the share **on the Proxmox host** and bind it
+into the container that runs qBittorrent. This is the right pattern for
+unprivileged LXCs, which can't mount network filesystems themselves. A host
+helper does it for you:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/TorHQ/main/scripts/mount-share.sh)"
+```
+
+It prompts for the share type (NFS or SMB/CIFS), the remote path, SMB
+credentials (stored root-only in `/etc/torhq-shares/<name>.cred`, never in
+fstab), and an optional target container to bind into. It then:
+
+1. Installs `nfs-common` / `cifs-utils` on the host as needed.
+2. Mounts the share at `/mnt/torhq-shares/<name>` and persists it in `/etc/fstab`
+   (survives reboot).
+3. Adds a bind mount point to the target LXC (`pct set <ctid> -mpN …`) at the
+   path you choose — then `pct reboot <ctid>` and point qBittorrent's save path
+   (and its `radarr`/`sonarr` category paths) there.
+
+Unattended example:
+
+```bash
+TORHQ_SHARE_TYPE=nfs TORHQ_SHARE_REMOTE=192.168.1.10:/volume1/media \
+TORHQ_SHARE_NAME=media TORHQ_TARGET_CTID=105 TORHQ_CT_PATH=/mnt/media \
+TORHQ_NONINTERACTIVE=1 \
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/TorHQ/main/scripts/mount-share.sh)"
+```
+
+> For unprivileged containers you may need to set the mount's `uid`/`gid` to your
+> download user's *mapped* id (host id + 100000) via `TORHQ_SHARE_OPTS` so the
+> service can write. TorHQ shows any NFS/SMB shares mounted into **its own**
+> container on the dashboard (**Network mounts**), read-only — it never mounts
+> anything itself.
+
 ### Manual install (inside an existing LXC)
 
 ```bash

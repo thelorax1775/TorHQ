@@ -6,6 +6,7 @@ import { ArrAdapter } from "../adapters/arr.js";
 import { SlskdAdapter } from "../adapters/slskd.js";
 import { listServicesSafe } from "../config/store.js";
 import { listJobs } from "../queue/queue.js";
+import { listNetworkMounts } from "../lib/mounts.js";
 import type { AppContext } from "../lib/context.js";
 
 function diskUsage(path: string): { path: string; totalBytes: number; freeBytes: number } | null {
@@ -76,5 +77,11 @@ export function statusRoutes(app: FastifyInstance, ctx: AppContext): void {
   // Storage usage for configured roots.
   app.get("/api/status/storage", { preHandler: app.requireAuth }, async () => ({
     disks: ctx.env.approvedRoots.map(diskUsage).filter(Boolean),
+  }));
+
+  // Read-only view of NFS/SMB shares bind-mounted into this container.
+  // TorHQ does not mount anything itself — see scripts/mount-share.sh.
+  app.get("/api/status/mounts", { preHandler: app.requireAuth }, async () => ({
+    mounts: listNetworkMounts(),
   }));
 }

@@ -8,6 +8,7 @@ export function Dashboard() {
   const [failures, setFailures] = useState<any>(null);
   const [arr, setArr] = useState<any>(null);
   const [slskd, setSlskd] = useState<any>(null);
+  const [mounts, setMounts] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
 
   async function load() {
@@ -20,6 +21,7 @@ export function Dashboard() {
       try { setDownloads(await api("/api/status/downloads")); } catch { setDownloads(null); }
       try { setArr(await api("/api/status/arr-activity")); } catch { setArr(null); }
       try { setSlskd(await api("/api/status/slskd")); } catch { setSlskd(null); }
+      try { setMounts(await api("/api/status/mounts")); } catch { setMounts(null); }
     } catch (e) { setErr((e as Error).message); }
   }
   useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, []);
@@ -115,6 +117,31 @@ export function Dashboard() {
                 <span className="small muted">{bytes(used)} / {bytes(d.totalBytes)}</span>
               </div>
               <div className="bar"><span style={{ width: `${Math.round(pct * 100)}%` }} /></div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="card">
+        <h2>Network mounts (NFS/SMB)</h2>
+        {(!mounts || mounts.mounts?.length === 0) && (
+          <p className="muted small">
+            No NFS/SMB shares mounted in this container. Add one on the Proxmox host with
+            <code> scripts/mount-share.sh</code> and bind it in.
+          </p>
+        )}
+        {mounts?.mounts?.map((m: any) => {
+          const hasCap = typeof m.totalBytes === "number";
+          const used = hasCap ? m.totalBytes - m.freeBytes : 0;
+          const pct = hasCap && m.totalBytes ? used / m.totalBytes : 0;
+          return (
+            <div key={m.target} style={{ marginBottom: 10 }}>
+              <div className="flex" style={{ justifyContent: "space-between" }}>
+                <span className="small">{m.target} <span className="muted">· {m.fstype}</span></span>
+                <span className="small muted">{hasCap ? `${bytes(m.freeBytes)} free / ${bytes(m.totalBytes)}` : "unreachable"}</span>
+              </div>
+              <div className="small muted" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.source}</div>
+              {hasCap && <div className="bar"><span style={{ width: `${Math.round(pct * 100)}%` }} /></div>}
             </div>
           );
         })}

@@ -439,6 +439,19 @@ export const openApiDoc = {
     "/api/status/slskd": { get: { summary: "Recent slskd downloads", responses: { "200": { description: "OK" }, "409": errorResponse("slskd not configured") } } },
     "/api/status/failures": { get: { summary: "Failed imports + retry queue", responses: { "200": { description: "OK" } } } },
     "/api/status/storage": { get: { summary: "Storage usage for approved roots", responses: { "200": { description: "OK" } } } },
+    "/api/status/mounts": {
+      get: {
+        summary: "NFS/SMB network mounts visible in this container (read-only)",
+        responses: {
+          "200": { description: "OK", content: { "application/json": { schema: { type: "object", properties: {
+            mounts: { type: "array", items: { type: "object", properties: {
+              target: { type: "string" }, source: { type: "string" }, fstype: { type: "string" },
+              totalBytes: { type: "integer" }, freeBytes: { type: "integer" },
+            } } },
+          } } } } },
+        },
+      },
+    },
     "/webhooks/slskd": {
       post: {
         summary: "slskd completed-download webhook (shared-token auth)",
