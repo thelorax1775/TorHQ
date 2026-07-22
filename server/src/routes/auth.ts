@@ -38,7 +38,8 @@ export function authRoutes(app: FastifyInstance, ctx: AppContext): void {
     return { username: user.username, csrfToken: s.csrfToken };
   });
 
-  app.post("/api/auth/logout", { preHandler: app.requireAuth }, async (req, reply) => {
+  // Logout is a state change, so it requires the CSRF token like every other mutation.
+  app.post("/api/auth/logout", { preHandler: [app.requireAuth, app.requireCsrf] }, async (req, reply) => {
     if (req.session) destroySession(req.session.sessionId);
     reply.clearCookie(SESSION_COOKIE, cookieOpts);
     return { ok: true };

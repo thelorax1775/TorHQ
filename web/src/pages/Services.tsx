@@ -19,6 +19,10 @@ export function Services() {
   const [sel, setSel] = useState<string>("qbittorrent");
   const [baseUrl, setBaseUrl] = useState("");
   const [secret, setSecret] = useState("");
+  // Typed extra config (only the fields a given service actually needs).
+  const [libraryId, setLibraryId] = useState("");
+  const [webhookToken, setWebhookToken] = useState("");
+  const [webhookTokenSet, setWebhookTokenSet] = useState(false);
   const [test, setTest] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -27,9 +31,21 @@ export function Services() {
   useEffect(() => {
     const svc = data?.services?.find((s: any) => s.kind === sel);
     setBaseUrl(svc?.baseUrl ?? DEFAULTS[sel] ?? ""); setSecret(""); setTest(null);
+    setLibraryId(svc?.extra?.libraryId != null ? String(svc.extra.libraryId) : "");
+    setWebhookToken(""); setWebhookTokenSet(!!svc?.extra?.webhookTokenSet);
   }, [sel, data]);
 
-  const body = () => JSON.stringify({ kind: sel, label: sel, baseUrl, secret: secret || undefined });
+  function buildExtra(): Record<string, unknown> | undefined {
+    if (sel === "kavita") return { libraryId: libraryId === "" ? undefined : Number(libraryId) };
+    if (sel === "slskd") return webhookToken ? { webhookToken } : {};
+    return undefined;
+  }
+
+  const body = () => JSON.stringify({
+    kind: sel, label: sel, baseUrl,
+    secret: secret || undefined,
+    extra: buildExtra(),
+  });
 
   async function doTest() {
     setBusy(true); setTest(null);
@@ -67,6 +83,21 @@ export function Services() {
         <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
         <label>Secret ({SECRET_HINT[sel]}) — leave blank to keep existing</label>
         <input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="••••••••" />
+
+        {sel === "kavita" && (
+          <>
+            <label>Kavita library ID (optional) — enables an explicit scan after import</label>
+            <input value={libraryId} onChange={(e) => setLibraryId(e.target.value)} placeholder="e.g. 3" inputMode="numeric" />
+          </>
+        )}
+        {sel === "slskd" && (
+          <>
+            <label>Webhook token {webhookTokenSet ? "(set — leave blank to keep)" : "(enables the completed-download webhook)"}</label>
+            <input type="password" value={webhookToken} onChange={(e) => setWebhookToken(e.target.value)}
+              placeholder={webhookTokenSet ? "••••••••" : "shared secret for X-TorHQ-Token"} />
+          </>
+        )}
+
         <div className="flex" style={{ marginTop: 14 }}>
           <button className="btn" onClick={doTest} disabled={busy}>Test connection</button>
           <button className="btn primary" onClick={save} disabled={busy}>Save</button>

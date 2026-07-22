@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { getDb } from "../db/index.js";
 import { services, libraries, type Service, type Library } from "../db/schema.js";
 import { encryptSecret, decryptSecret, maskSecret } from "../lib/crypto.js";
+import { mergeExtra, safeExtra } from "./extra.js";
 
 export const SERVICE_KINDS = [
   "qbittorrent", "radarr", "sonarr", "lidarr", "prowlarr",
@@ -28,13 +29,16 @@ export function upsertService(
   const secretEnc = input.secret
     ? encryptSecret(input.secret, masterKey)
     : existing?.secretEnc ?? null; // keep prior secret if not re-sent
+  // Merge typed extra config, retaining write-only secrets (e.g. webhook token).
+  const existingExtra: Record<string, unknown> = existing?.extraJson ? JSON.parse(existing.extraJson) : {};
+  const mergedExtra = mergeExtra(input.kind, input.extra, existingExtra);
   const row = {
     kind: input.kind,
     label: input.label,
     baseUrl: input.baseUrl.replace(/\/+$/, ""),
     secretEnc,
     enabled: input.enabled ?? true,
-    extraJson: input.extra ? JSON.stringify(input.extra) : existing?.extraJson ?? null,
+    extraJson: Object.keys(mergedExtra).length ? JSON.stringify(mergedExtra) : null,
     updatedAt: Date.now(),
   };
   if (existing) {
@@ -60,7 +64,8 @@ export function getServiceDecrypted(kind: string, masterKey: Buffer): DecryptedS
 
 /** Public/browser-safe view: secrets are masked, never returned in full. */
 export function listServicesSafe(): Array<
-  Pick<Service, "kind" | "label" | "baseUrl" | "enabled" | "lastHealthy" | "lastStatus"> & { secretMask: string | null }
+  Pick<Service, "kind" | "label" | "baseUrl" | "enabled" | "lastHealthy" | "lastStatus">
+  & { secretMask: string | null; extra: Record<string, unknown> }
 > {
   const db = getDb();
   return db.select().from(services).all().map((r) => ({
@@ -71,6 +76,8 @@ export function listServicesSafe(): Array<
     lastHealthy: r.lastHealthy,
     lastStatus: r.lastStatus,
     secretMask: r.secretEnc ? maskSecret(r.secretEnc) : null,
+    // Secret extra fields (e.g. slskd webhookToken) are projected to booleans.
+    extra: safeExtra(r.kind, r.extraJson ? JSON.parse(r.extraJson) : {}),
   }));
 }
 

@@ -101,6 +101,13 @@ export const activity = sqliteTable(
   }),
 );
 
+/** Applied forward-only schema migrations (see db/migrate.ts). */
+export const schemaMigrations = sqliteTable("schema_migrations", {
+  version: integer("version").primaryKey(),
+  name: text("name").notNull(),
+  appliedAt: integer("applied_at").notNull().default(sql`(unixepoch() * 1000)`),
+});
+
 export type User = typeof users.$inferSelect;
 export type Service = typeof services.$inferSelect;
 export type Library = typeof libraries.$inferSelect;

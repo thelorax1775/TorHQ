@@ -38,9 +38,11 @@ SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cp -a "${SRC_DIR}/." "${APP_DIR}/"
 
 # 4. Build (installs deps + compiles server and web).
+# --include=dev forces devDependencies (tsc/vite) even if NODE_ENV=production
+# is inherited; they are required to build. `npm ci` needs the committed lockfile.
 echo "==> Building TorHQ"
 cd "${APP_DIR}"
-npm ci --omit=dev=false
+npm ci --include=dev
 npm run build
 
 # 5. Env file (created once; never overwritten).
