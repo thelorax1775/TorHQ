@@ -208,7 +208,8 @@ else
   git clone --depth 1 --branch "${BRANCH}" "${REPO_URL}" /opt/torhq-src
 fi
 cd /opt/torhq-src
-./scripts/install.sh
+# Invoke via bash so it runs even if the file's executable bit didn't survive.
+bash ./scripts/install.sh
 # Make TorHQ reachable on the container IP (installer defaults to loopback).
 sed -i "s#^TORHQ_HOST=.*#TORHQ_HOST=${BIND}#" /etc/torhq/torhq.env
 systemctl restart torhq
