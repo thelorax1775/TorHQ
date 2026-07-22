@@ -1,0 +1,23 @@
+# deps
+node_modules/
+**/node_modules/
+# build
+server/dist/
+web/dist/
+# runtime data
+data/
+*.db
+*.db-*
+*.sqlite
+# secrets
+.env
+*.local
+# logs
+*.log
+# os
+.DS_Store
+Thumbs.db
+# staging/downloads (never commit media)
+staging/
+downloads/
+libraries/

@@ -1,0 +1,40 @@
+[Unit]
+Description=TorHQ media homelab control plane
+Documentation=https://github.com/your-org/torhq
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=torhq
+Group=torhq
+# Secrets + infra config (NOT world-readable).
+EnvironmentFile=/etc/torhq/torhq.env
+WorkingDirectory=/srv/torhq/app
+ExecStart=/usr/bin/node /srv/torhq/app/server/dist/index.js
+Restart=on-failure
+RestartSec=5
+# Structured JSON logs go to journald.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=torhq
+
+# ---- Hardening (least privilege; never runs as root) ----
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+# Writable paths: data dir + the shared media roots TorHQ manages.
+# Add each mounted media path you want intake to write to here.
+ReadWritePaths=/srv/torhq/data /srv/torhq/staging /srv/torhq/downloads /srv/torhq/libraries
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,35 @@
+{
+  "name": "@torhq/server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "migrate": "tsx src/db/migrate.ts"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^9.3.1",
+    "@fastify/rate-limit": "^9.1.0",
+    "@fastify/static": "^7.0.4",
+    "better-sqlite3": "^11.3.0",
+    "drizzle-orm": "^0.33.0",
+    "fastify": "^4.28.1",
+    "pino": "^9.3.2",
+    "undici": "^6.19.8",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^20.14.15",
+    "drizzle-kit": "^0.24.0",
+    "tsx": "^4.17.0",
+    "typescript": "^5.5.4",
+    "vitest": "^2.0.5"
+  }
+}
