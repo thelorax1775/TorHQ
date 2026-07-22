@@ -90,6 +90,17 @@ describe("auth flow + CSRF", () => {
     expect(svc.secretMask).not.toContain("k");
     expect(svc.secretMask).toMatch(/•/);
   });
+  it("rejects logout without the CSRF header", async () => {
+    const r = await app.inject({ method: "POST", url: "/api/auth/logout", headers: { cookie } });
+    expect(r.statusCode).toBe(403);
+  });
+  it("accepts logout with a valid CSRF header", async () => {
+    const r = await app.inject({
+      method: "POST", url: "/api/auth/logout",
+      headers: { cookie, "x-csrf-token": csrf },
+    });
+    expect(r.statusCode).toBe(200);
+  });
 });
 
 describe("intake path validation via API", () => {

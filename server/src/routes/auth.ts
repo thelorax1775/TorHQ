@@ -38,7 +38,9 @@ export function authRoutes(app: FastifyInstance, ctx: AppContext): void {
     return { username: user.username, csrfToken: s.csrfToken };
   });
 
-  app.post("/api/auth/logout", { preHandler: app.requireAuth }, async (req, reply) => {
+  // Logout mutates session state, so it requires the CSRF header like any other
+  // state change (defends against forced-logout CSRF).
+  app.post("/api/auth/logout", { preHandler: [app.requireAuth, app.requireCsrf] }, async (req, reply) => {
     if (req.session) destroySession(req.session.sessionId);
     reply.clearCookie(SESSION_COOKIE, cookieOpts);
     return { ok: true };

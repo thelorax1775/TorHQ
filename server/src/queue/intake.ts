@@ -4,7 +4,6 @@ import { join, basename, dirname } from "node:path";
 import type { Buffer } from "node:buffer";
 import { getLibrary } from "../config/store.js";
 import { getAdapter } from "../adapters/registry.js";
-import { JellyfinAdapter } from "../adapters/jellyfin.js";
 import { NavidromeAdapter } from "../adapters/navidrome.js";
 import { KavitaAdapter } from "../adapters/kavita.js";
 import { safeResolve, safeFilename, PathValidationError } from "../security/paths.js";
@@ -118,6 +117,14 @@ export async function runIntake(
   return { destPath: preview.destPath };
 }
 
+/**
+ * Trigger a rescan on the target service after a manual intake.
+ *
+ * Manual-intake libraries only ever target Kavita (books/manga/comics) or
+ * Navidrome (music) — see the `targetService` enum in routes/setup.ts. Video is
+ * owned by Radarr/Sonarr and their download clients, so Jellyfin is never a
+ * manual-intake target and is not handled here (TorHQ only health-checks it).
+ */
 async function requestRescan(target: string, masterKey: Buffer): Promise<void> {
   if (target === "navidrome") {
     const a = getAdapter("navidrome", masterKey) as NavidromeAdapter | null;
@@ -125,9 +132,6 @@ async function requestRescan(target: string, masterKey: Buffer): Promise<void> {
   } else if (target === "kavita") {
     const a = getAdapter("kavita", masterKey) as KavitaAdapter | null;
     if (a) await a.scanLibrary();
-  } else if (target === "jellyfin") {
-    const a = getAdapter("jellyfin", masterKey) as JellyfinAdapter | null;
-    if (a) await a.refreshLibraries();
   }
 }
 

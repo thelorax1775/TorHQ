@@ -106,7 +106,7 @@ docs/              curl examples for every endpoint
 | Prowlarr     | Indexer health                                                 |
 | qBittorrent  | Active downloads grouped by owning category                    |
 | slskd        | Recent Soulseek downloads + completed-download webhook         |
-| Jellyfin     | Library rescan trigger (video)                                 |
+| Jellyfin     | Health monitoring (video library is owned by Radarr/Sonarr)    |
 | Navidrome    | Library rescan trigger (music intake target)                   |
 | Kavita       | Library rescan trigger (books/manga intake target)             |
 
