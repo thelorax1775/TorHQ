@@ -267,6 +267,57 @@ A scripted walkthrough of every endpoint is in [`docs/curl-examples.md`](docs/cu
 TorHQ is designed to run as an unprivileged systemd service inside a Debian 12
 Proxmox LXC, behind an optional nginx TLS terminator.
 
+### One-line install on a Proxmox VE host (auto-creates the LXC)
+
+Run this **on the Proxmox VE host** (as root). It creates a fresh unprivileged
+Debian 12 container, installs TorHQ inside it, and starts it — no manual
+container setup:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/TorHQ/main/scripts/proxmox-install.sh)"
+```
+
+When it finishes it prints the container IP; open `http://<container-ip>:8787` and
+create the admin account.
+
+The installer is non-interactive with sensible defaults, all overridable via
+environment variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `TORHQ_CTID` | next free id | LXC container ID. |
+| `TORHQ_HOSTNAME` | `torhq` | Container hostname. |
+| `TORHQ_DISK` | `8` | Root disk size (GB). |
+| `TORHQ_RAM` | `2048` | RAM (MB). |
+| `TORHQ_CORES` | `2` | vCPU count. |
+| `TORHQ_STORAGE` | auto (`local-lvm` if present) | Storage for the rootfs. |
+| `TORHQ_TEMPLATE_STORAGE` | `local` | Storage holding the LXC template. |
+| `TORHQ_BRIDGE` | `vmbr0` | Network bridge. |
+| `TORHQ_NET` | `dhcp` | `dhcp` or a static CIDR (e.g. `192.168.1.50/24`). |
+| `TORHQ_GW` | *(none)* | Gateway — **required** for a static `TORHQ_NET`. |
+| `TORHQ_BIND` | `0.0.0.0` | Address TorHQ binds to inside the CT (LAN-reachable). |
+| `TORHQ_BRANCH` | `main` | Git branch to install from. |
+
+Example — a fixed IP and more resources:
+
+```bash
+TORHQ_NET=192.168.1.50/24 TORHQ_GW=192.168.1.1 TORHQ_RAM=4096 TORHQ_DISK=16 \
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/TorHQ/main/scripts/proxmox-install.sh)"
+```
+
+> The installer binds TorHQ to `0.0.0.0` so it's reachable on your LAN at the
+> container IP. To expose it beyond the LAN, front it with the nginx TLS reverse
+> proxy below and set `TORHQ_TRUST_PROXY`/`TORHQ_COOKIE_SECURE`.
+
+> **Before PR #3 is merged**, install from the feature branch by also fetching the
+> script from it:
+> ```bash
+> TORHQ_BRANCH=claude/arr-stack-integration-9jtos4 \
+>   bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/TorHQ/claude/arr-stack-integration-9jtos4/scripts/proxmox-install.sh)"
+> ```
+
+### Manual install (inside an existing LXC)
+
 ```bash
 # Inside the LXC, as root:
 git clone <repo> /opt/torhq-src && cd /opt/torhq-src
