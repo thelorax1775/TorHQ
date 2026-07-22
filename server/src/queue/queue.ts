@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, eq, lte } from "drizzle-orm";
+import { and, asc, desc, eq, lte } from "drizzle-orm";
 import type { Buffer } from "node:buffer";
 import { getDb } from "../db/index.js";
 import { jobs, type Job } from "../db/schema.js";
@@ -144,13 +144,18 @@ export class Worker {
   }
 }
 
+/**
+ * Most recent jobs first, newest-first ordering applied *in SQL* so that LIMIT
+ * selects the newest page. Previously the limit was applied to an unordered
+ * SELECT and the page was sorted afterwards in JS, which meant that once the
+ * table held more than `limit` rows the API returned the OLDEST jobs and newly
+ * queued work never appeared in /api/jobs or /api/status/failures.
+ */
 export function listJobs(status?: string, limit = 100): Job[] {
   const db = getDb();
-  const q = db.select().from(jobs);
-  const rows = status
-    ? q.where(eq(jobs.status, status)).limit(limit).all()
-    : q.limit(limit).all();
-  return rows.sort((a, b) => b.createdAt - a.createdAt);
+  const base = db.select().from(jobs);
+  const filtered = status ? base.where(eq(jobs.status, status)) : base;
+  return filtered.orderBy(desc(jobs.createdAt)).limit(limit).all();
 }
 
 export function getJob(id: string): Job | undefined {

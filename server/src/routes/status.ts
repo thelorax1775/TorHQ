@@ -11,7 +11,9 @@ import type { AppContext } from "../lib/context.js";
 function diskUsage(path: string): { path: string; totalBytes: number; freeBytes: number } | null {
   try {
     const s = statfsSync(path);
-    return { path, totalBytes: s.blocks * s.bsize, freeBytes: s.bfree * s.bsize };
+    // bavail (free to unprivileged users), not bfree (which counts the
+    // root-reserved blocks the torhq service can never actually use).
+    return { path, totalBytes: s.blocks * s.bsize, freeBytes: s.bavail * s.bsize };
   } catch {
     return null;
   }
