@@ -6,7 +6,7 @@ cd "${APP_DIR}"
 /srv/torhq/app/scripts/backup.sh >/dev/null || true
 # If deployed from git:
 if [[ -d .git ]]; then git pull --ff-only; fi
-npm ci --omit=dev=false
+npm ci --include=dev   # devDependencies (tsc/vite) are needed to build
 npm run build
 npm run migrate --workspace server || true   # migrations are idempotent
 chown -R torhq:torhq /srv/torhq

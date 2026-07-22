@@ -4,6 +4,7 @@ node_modules/
 # build
 server/dist/
 web/dist/
+*.tsbuildinfo
 # runtime data
 data/
 *.db
