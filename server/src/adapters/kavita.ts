@@ -33,12 +33,23 @@ export class KavitaAdapter implements ServiceAdapter {
     }
   }
 
-  /** Optional explicit scan when a libraryId is configured. */
+  /**
+   * Optional explicit scan when a libraryId is configured. When called with no
+   * argument, the id is taken from the service's `extra.libraryId` config; if
+   * neither is present we rely on Kavita's own folder watcher.
+   */
   async scanLibrary(libraryId?: number): Promise<void> {
-    if (!libraryId) return; // rely on Kavita's folder watcher
+    const id = libraryId ?? this.configuredLibraryId();
+    if (!id) return; // rely on Kavita's folder watcher
     const jwt = await this.token();
     await httpJson(this.cfg.baseUrl, "/api/Library/scan", {
-      method: "POST", headers: { authorization: `Bearer ${jwt}` }, query: { libraryId },
+      method: "POST", headers: { authorization: `Bearer ${jwt}` }, query: { libraryId: id },
     });
+  }
+
+  private configuredLibraryId(): number | undefined {
+    const raw = this.cfg.extra?.libraryId;
+    const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
+    return Number.isInteger(n) && n > 0 ? n : undefined;
   }
 }
