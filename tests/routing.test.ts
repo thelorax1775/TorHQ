@@ -35,6 +35,15 @@ describe("authorization", () => {
     const r = await app.inject({ method: "GET", url: "/health" });
     expect(r.statusCode).toBe(200);
   });
+  it("serves an OpenAPI doc with schemas and CSRF security on mutations", async () => {
+    const r = await app.inject({ method: "GET", url: "/api/openapi.json" });
+    expect(r.statusCode).toBe(200);
+    const doc = r.json();
+    expect(doc.components.schemas.Error).toBeTruthy();
+    expect(doc.components.schemas.Candidate).toBeTruthy();
+    // A mutating route declares the CSRF token security requirement.
+    expect(doc.paths["/api/services"].post.security).toContainEqual({ cookieAuth: [], csrfToken: [] });
+  });
   it("blocks unauthenticated access to protected routes", async () => {
     const r = await app.inject({ method: "GET", url: "/api/services" });
     expect(r.statusCode).toBe(401);
