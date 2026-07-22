@@ -34,3 +34,19 @@ export interface ArrActivity {
   title: string;
   date: string;
 }
+
+/**
+ * A normalized lookup result the user chooses from before anything is added.
+ * `selectionId` is a stable, flavor-specific foreign id (tmdb/tvdb/musicbrainz)
+ * used to re-select the exact candidate on submit, so TorHQ never blindly adds
+ * the first search hit.
+ */
+export interface ArrCandidate {
+  selectionId: string;
+  title: string;
+  subtitle?: string; // e.g. artist name for an album
+  year?: number;
+  poster?: string;
+  overview?: string;
+  alreadyAdded: boolean; // the lookup already carries a library id
+}

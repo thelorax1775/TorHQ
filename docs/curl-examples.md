@@ -51,24 +51,37 @@ Configure qBittorrent with `secret` as `username:password`, then create the
 ownership categories in qBittorrent itself:
 `radarr`, `sonarr`, `lidarr`, `torhq-kavita`, `torhq-music`.
 
-## 4. Submit requests (TorHQ only requests; the *arr owns the pipeline)
+## 4. Submit requests (search → select → confirm; TorHQ only requests)
+
+TorHQ never adds "the first result". You **search**, pick a specific candidate by
+its `selectionId`, then **confirm**. Routes: `movie` (Radarr), `tv` (Sonarr),
+`music` (Lidarr — note Lidarr requires a `metadataProfileId`).
 
 ```bash
-# Movie -> Radarr
-curl -s -b $JAR $BASE/api/requests/movie/options | jq   # get profiles + root folders
+# 1. Load the form options (quality profiles, root folders; Lidarr also
+#    returns metadataProfiles).
+curl -s -b $JAR $BASE/api/requests/movie/options | jq
+
+# 2. Search and pick a candidate.
+curl -s -b $JAR "$BASE/api/requests/movie/search?term=Blade%20Runner%202049" | jq
+#    -> { "candidates": [ { "selectionId": "tmdb:335984", "title": "...", ... } ] }
+
+# 3. Confirm the chosen selectionId.
 curl -s -b $JAR -X POST $BASE/api/requests/movie \
   -H "x-csrf-token: $CSRF" -H 'content-type: application/json' \
-  -d '{"term":"Blade Runner 2049","qualityProfileId":1,"rootFolderPath":"/data/movies","searchNow":true}'
+  -d '{"term":"Blade Runner 2049","selectionId":"tmdb:335984","qualityProfileId":1,"rootFolderPath":"/data/movies","searchNow":true}'
 
-# TV -> Sonarr
+# TV -> Sonarr (selectionId is "tvdb:<id>")
+curl -s -b $JAR "$BASE/api/requests/tv/search?term=Severance" | jq
 curl -s -b $JAR -X POST $BASE/api/requests/tv \
   -H "x-csrf-token: $CSRF" -H 'content-type: application/json' \
-  -d '{"term":"Severance","qualityProfileId":1,"rootFolderPath":"/data/tv","searchNow":true}'
+  -d '{"term":"Severance","selectionId":"tvdb:371980","qualityProfileId":1,"rootFolderPath":"/data/tv","searchNow":true}'
 
-# Artist/Album -> Lidarr
+# Artist -> Lidarr (selectionId is "mbid:<musicbrainz-id>"; metadataProfileId required)
+curl -s -b $JAR "$BASE/api/requests/music/search?term=Radiohead" | jq
 curl -s -b $JAR -X POST $BASE/api/requests/music \
   -H "x-csrf-token: $CSRF" -H 'content-type: application/json' \
-  -d '{"term":"Radiohead","qualityProfileId":1,"rootFolderPath":"/data/music","searchNow":true}'
+  -d '{"term":"Radiohead","selectionId":"mbid:a74b1b7f-71a5-4011-9441-d0b5e4122711","qualityProfileId":1,"metadataProfileId":1,"rootFolderPath":"/data/music","searchNow":true}'
 ```
 
 ## 5. Manual intake (books/manga -> Kavita, music -> Navidrome)
