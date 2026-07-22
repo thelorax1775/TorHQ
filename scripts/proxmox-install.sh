@@ -28,6 +28,7 @@ die()  { echo "${RD}error${NC} $*" >&2; exit 1; }
 # ---- defaults (override via env) ------------------------------------------
 REPO_URL="${TORHQ_REPO_URL:-https://github.com/thelorax1775/TorHQ}"
 BRANCH="${TORHQ_BRANCH:-main}"
+GIT_TOKEN="${TORHQ_GIT_TOKEN:-}"   # required only if the repo is private
 HOSTNAME_="${TORHQ_HOSTNAME:-torhq}"
 DISK_GB="${TORHQ_DISK:-8}"          # rootfs size in GB
 RAM_MB="${TORHQ_RAM:-2048}"
@@ -139,7 +140,16 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y git curl ca-certificates openssl
 rm -rf /opt/torhq-src
-git clone --depth 1 --branch "${BRANCH}" "${REPO_URL}" /opt/torhq-src
+if [[ -n "${GIT_TOKEN}" ]]; then
+  # Private repo: authenticate the clone with a short-lived header so the token
+  # is never written to git config (and thus never copied into the app dir).
+  AUTH_B64="\$(printf 'x-access-token:%s' "${GIT_TOKEN}" | base64 | tr -d '\n')"
+  GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraheader \
+    GIT_CONFIG_VALUE_0="AUTHORIZATION: basic \${AUTH_B64}" \
+    git clone --depth 1 --branch "${BRANCH}" "${REPO_URL}" /opt/torhq-src
+else
+  git clone --depth 1 --branch "${BRANCH}" "${REPO_URL}" /opt/torhq-src
+fi
 cd /opt/torhq-src
 ./scripts/install.sh
 # Make TorHQ reachable on the container IP (installer defaults to loopback).

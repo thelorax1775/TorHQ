@@ -280,6 +280,24 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/TorHQ/main/
 When it finishes it prints the container IP; open `http://<container-ip>:8787` and
 create the admin account.
 
+**If the repository is private**, `raw.githubusercontent.com` can't serve the
+script and the in-container `git clone` needs credentials. Use a GitHub token
+(fine-grained PAT with **Contents → Read-only** on this repo) — export it so both
+the download and the clone can authenticate:
+
+```bash
+export TORHQ_GIT_TOKEN=github_pat_xxxxxxxx
+bash -c "$(curl -fsSL \
+  -H "Authorization: Bearer $TORHQ_GIT_TOKEN" \
+  -H "Accept: application/vnd.github.raw" \
+  https://api.github.com/repos/thelorax1775/TorHQ/contents/scripts/proxmox-install.sh)"
+```
+
+The exported `TORHQ_GIT_TOKEN` is inherited by the script and used for the clone;
+it is passed to git via a request header, so it is never written to disk. (If you
+make the repo public, the plain `curl … raw.githubusercontent.com …` one-liner
+above works with no token.)
+
 The installer is non-interactive with sensible defaults, all overridable via
 environment variables:
 
