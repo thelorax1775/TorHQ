@@ -83,12 +83,44 @@ export class QbittorrentAdapter implements ServiceAdapter {
 
   /** Ensure ownership-distinguishing categories exist (radarr/sonarr/torhq-*). */
   async ensureCategory(name: string, savePath: string): Promise<void> {
+    await this.postForm("api/v2/torrents/createCategory", { category: name, savePath });
+  }
+
+  /**
+   * Add a magnet (or .torrent URL) to qBittorrent. This is the ONLY write TorHQ
+   * makes to qBittorrent, and it is always an explicit, user-initiated grab. The
+   * `category` tags ownership: `torhq-manual` for raw grabs, or an *arr's category
+   * (radarr/sonarr/lidarr) so that *arr adopts and imports the download.
+   */
+  async addTorrent(input: { url: string; category?: string; paused?: boolean }): Promise<void> {
+    const form: Record<string, string> = { urls: input.url };
+    if (input.category) form.category = input.category;
+    if (input.paused) form.paused = "true";
+    const res = await this.postForm("api/v2/torrents/add", form);
+    // qBittorrent replies with the literal body "Ok." on success, "Fails." otherwise.
+    if (res.trim().toLowerCase().startsWith("fails")) {
+      throw new Error("qBittorrent rejected the torrent (Fails.)");
+    }
+  }
+
+  /** POST an x-www-form-urlencoded body to an authed endpoint, re-logging in once. */
+  private async postForm(path: string, fields: Record<string, string>): Promise<string> {
     if (!this.cookie) await this.login();
     const base = this.cfg.baseUrl.endsWith("/") ? this.cfg.baseUrl : this.cfg.baseUrl + "/";
-    await request(new URL("api/v2/torrents/createCategory", base).toString(), {
+    const url = new URL(path, base).toString();
+    const send = async () => request(url, {
       method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded", cookie: this.cookie! },
-      body: new URLSearchParams({ category: name, savePath }).toString(),
+      headers: { "content-type": "application/x-www-form-urlencoded", cookie: this.cookie!, referer: this.cfg.baseUrl },
+      body: new URLSearchParams(fields).toString(),
     });
+    let res = await send();
+    if (res.statusCode === 403) { // SID expired — re-login once and retry.
+      this.cookie = null;
+      await this.login();
+      res = await send();
+    }
+    const text = await res.body.text();
+    if (res.statusCode >= 400) throw new Error(`qBittorrent HTTP ${res.statusCode} for ${path}`);
+    return text;
   }
 }

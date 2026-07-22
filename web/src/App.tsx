@@ -5,11 +5,12 @@ import { Dashboard } from "./pages/Dashboard.js";
 import { Services } from "./pages/Services.js";
 import { Libraries } from "./pages/Libraries.js";
 import { Requests } from "./pages/Requests.js";
+import { Search } from "./pages/Search.js";
 import { Intake } from "./pages/Intake.js";
 import { Jobs } from "./pages/Jobs.js";
 
 type Me = { authenticated: boolean; needsSetup: boolean; csrfToken: string | null };
-const PAGES = ["Dashboard", "Requests", "Intake", "Jobs", "Services", "Libraries"] as const;
+const PAGES = ["Dashboard", "Search", "Requests", "Intake", "Jobs", "Services", "Libraries"] as const;
 type Page = (typeof PAGES)[number];
 
 export function App() {
@@ -35,6 +36,7 @@ export function App() {
       </aside>
       <main className="main">
         {page === "Dashboard" && <Dashboard />}
+        {page === "Search" && <Search />}
         {page === "Requests" && <Requests />}
         {page === "Intake" && <Intake />}
         {page === "Jobs" && <Jobs />}

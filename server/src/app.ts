@@ -12,6 +12,7 @@ import { authPlugin } from "./auth/plugin.js";
 import { authRoutes } from "./routes/auth.js";
 import { setupRoutes } from "./routes/setup.js";
 import { requestRoutes } from "./routes/requests.js";
+import { searchRoutes } from "./routes/search.js";
 import { jobRoutes } from "./routes/jobs.js";
 import { statusRoutes } from "./routes/status.js";
 import { webhookRoutes } from "./routes/webhooks.js";
@@ -50,6 +51,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   // Authenticated + general routes.
   setupRoutes(app, ctx);
   requestRoutes(app, ctx);
+  searchRoutes(app, ctx);
   jobRoutes(app, ctx);
   statusRoutes(app, ctx);
   systemRoutes(app, ctx);

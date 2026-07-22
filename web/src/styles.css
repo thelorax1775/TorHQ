@@ -50,3 +50,6 @@ th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--bord
 th { color: var(--muted); font-weight: 500; }
 .small { font-size: 12px; }
 .flex { display: flex; gap: 10px; align-items: center; }
+.nowrap { white-space: nowrap; }
+button.btn.small { padding: 4px 9px; font-size: 12px; }
+code { background: var(--panel2); padding: 1px 5px; border-radius: 5px; font-size: 12px; }

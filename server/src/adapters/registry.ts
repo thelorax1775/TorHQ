@@ -8,11 +8,12 @@ import { SlskdAdapter } from "./slskd.js";
 import { JellyfinAdapter } from "./jellyfin.js";
 import { NavidromeAdapter } from "./navidrome.js";
 import { KavitaAdapter } from "./kavita.js";
+import { TorrentSearchAdapter } from "./torrentsearch.js";
 import type { AdapterConfig, HealthResult, ServiceAdapter } from "./types.js";
 
 export type AnyAdapter =
   | ArrAdapter | QbittorrentAdapter | ProwlarrAdapter | SlskdAdapter
-  | JellyfinAdapter | NavidromeAdapter | KavitaAdapter;
+  | JellyfinAdapter | NavidromeAdapter | KavitaAdapter | TorrentSearchAdapter;
 
 function build(kind: string, cfg: AdapterConfig): AnyAdapter {
   switch (kind) {
@@ -25,6 +26,7 @@ function build(kind: string, cfg: AdapterConfig): AnyAdapter {
     case "jellyfin": return new JellyfinAdapter(cfg);
     case "navidrome": return new NavidromeAdapter(cfg);
     case "kavita": return new KavitaAdapter(cfg);
+    case "torrentsearch": return new TorrentSearchAdapter(cfg);
     default: throw new Error(`Unknown service kind: ${kind}`);
   }
 }
