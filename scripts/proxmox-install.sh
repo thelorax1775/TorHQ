@@ -8,9 +8,11 @@
 #
 #   bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/TorHQ/main/scripts/proxmox-install.sh)"
 #
-# Everything is overridable via environment variables (see DEFAULTS below), so
-# the same one-liner works unattended. This script is self-contained and does
-# not depend on any third-party helper framework.
+# By default it shows an interactive menu (like the community-scripts installers)
+# where you can accept sensible defaults or switch to Advanced and choose the
+# container ID, resources, storage location, network, and more. Set every value
+# via environment variables (and TORHQ_NONINTERACTIVE=1) to run it unattended.
+# Self-contained — no third-party helper framework.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -20,10 +22,11 @@ if [[ -t 1 ]]; then
 else
   RD=""; GN=""; YW=""; BL=""; NC=""
 fi
-info() { echo "${BL}==>${NC} $*"; }
-ok()   { echo "${GN} ok${NC} $*"; }
-warn() { echo "${YW}warn${NC} $*"; }
-die()  { echo "${RD}error${NC} $*" >&2; exit 1; }
+info()   { echo "${BL}==>${NC} $*"; }
+ok()     { echo "${GN} ok${NC} $*"; }
+warn()   { echo "${YW}warn${NC} $*"; }
+die()    { echo "${RD}error${NC} $*" >&2; exit 1; }
+cancel() { echo "${RD}Installation cancelled.${NC}" >&2; exit 1; }
 
 # ---- defaults (override via env) ------------------------------------------
 REPO_URL="${TORHQ_REPO_URL:-https://github.com/thelorax1775/TorHQ}"
@@ -39,35 +42,88 @@ NET="${TORHQ_NET:-dhcp}"            # "dhcp" or a static CIDR like 192.168.1.50/
 GATEWAY="${TORHQ_GW:-}"             # required only for a static NET
 UNPRIVILEGED="${TORHQ_UNPRIVILEGED:-1}"
 BIND="${TORHQ_BIND:-0.0.0.0}"      # bind address inside the CT (LAN-reachable)
-TEMPLATE_STORAGE="${TORHQ_TEMPLATE_STORAGE:-local}"
+TEMPLATE_STORAGE="${TORHQ_TEMPLATE_STORAGE:-}"  # auto-detected if empty
 CTID="${TORHQ_CTID:-}"             # auto-picked if empty
-STORAGE="${TORHQ_STORAGE:-}"       # auto-detected if empty
+STORAGE="${TORHQ_STORAGE:-}"       # rootfs storage; auto-detected if empty
 
 # ---- preflight ------------------------------------------------------------
 [[ $EUID -eq 0 ]] || die "run as root on the Proxmox VE host."
-command -v pct     >/dev/null || die "'pct' not found — this must run on a Proxmox VE host."
-command -v pveam   >/dev/null || die "'pveam' not found — this must run on a Proxmox VE host."
-command -v pvesm   >/dev/null || die "'pvesm' not found — this must run on a Proxmox VE host."
+command -v pct   >/dev/null || die "'pct' not found — this must run on a Proxmox VE host."
+command -v pveam >/dev/null || die "'pveam' not found — this must run on a Proxmox VE host."
+command -v pvesm >/dev/null || die "'pvesm' not found — this must run on a Proxmox VE host."
 
-# Pick the next free CTID if one wasn't given.
+# List the names of *enabled* storages that support a given content type.
+# pvesm columns: Name Type Status Total Used Available %
+enabled_storages() { pvesm status -content "$1" 2>/dev/null | awk 'NR>1 && $3=="active"{print $1}'; }
+first_enabled()   { enabled_storages "$1" | head -1; }
+storage_enabled() { enabled_storages "$1" | grep -qx "$2"; }
+
+# ---- resolve container id + default storages ------------------------------
 if [[ -z "$CTID" ]]; then
   CTID="$(pvesh get /cluster/nextid 2>/dev/null)" || die "could not determine a free container ID."
 fi
-pct status "$CTID" &>/dev/null && die "container $CTID already exists — set TORHQ_CTID to a free id."
 
-# Pick a rootfs storage that can hold containers, if not specified.
+# Prefer local-lvm for the rootfs when it's enabled; otherwise first enabled rootdir.
 if [[ -z "$STORAGE" ]]; then
-  if pvesm status -content rootdir 2>/dev/null | awk 'NR>1{print $1}' | grep -qx "local-lvm"; then
-    STORAGE="local-lvm"
+  if storage_enabled rootdir local-lvm; then STORAGE="local-lvm"; else STORAGE="$(first_enabled rootdir)"; fi
+fi
+# Templates need a file-level storage (dir/nfs/cifs) with 'vztmpl' content.
+[[ -z "$TEMPLATE_STORAGE" ]] && TEMPLATE_STORAGE="$(first_enabled vztmpl)"
+
+# ---- interactive menu (whiptail) ------------------------------------------
+INTERACTIVE=1
+{ [[ -t 0 ]] && command -v whiptail >/dev/null && [[ -z "${TORHQ_NONINTERACTIVE:-}" ]]; } || INTERACTIVE=0
+
+ask()  { local o; o=$(whiptail --title "TorHQ setup" --inputbox "$1" 10 72 "$2" 3>&1 1>&2 2>&3) || cancel; printf '%s' "$o"; }
+numv() { [[ "$1" =~ ^[0-9]+$ ]] && printf '%s' "$1" || printf '%s' "$2"; }
+
+# Present a menu of enabled storages for a content type; echoes the choice.
+pick_storage() { # $1 content  $2 title  $3 current-default
+  local ctype="$1" title="$2" cur="$3"; local -a opts=(); local n t rest
+  while read -r n t rest; do opts+=("$n" "type: $t"); done < <(pvesm status -content "$ctype" 2>/dev/null | awk 'NR>1 && $3=="active"')
+  [[ ${#opts[@]} -gt 0 ]] || { whiptail --title "$title" --msgbox \
+      "No enabled storage supports this content type ($ctype).\n\nEnable one in Datacenter → Storage (add the matching content type), then re-run." 12 72; cancel; }
+  local def="${cur:-${opts[0]}}"
+  whiptail --title "$title" --default-item "$def" --menu "Select storage" 20 72 10 "${opts[@]}" 3>&1 1>&2 2>&3 || cancel
+}
+
+if [[ "$INTERACTIVE" -eq 1 ]]; then
+  if whiptail --title "TorHQ installer" --yesno \
+      "Create an LXC and install TorHQ with these defaults?\n\n  CTID:      ${CTID}\n  Hostname:  ${HOSTNAME_}\n  Resources: ${CORES} vCPU, ${RAM_MB} MB RAM, ${DISK_GB} GB disk\n  Storage:   ${STORAGE:-<none found>} (rootfs)\n  Template:  ${TEMPLATE_STORAGE:-<none found>}\n  Network:   DHCP on ${BRIDGE}\n\nYes = use defaults.   No = Advanced (choose storage, resources, IP, …)." \
+      20 74 --yes-button "Use defaults" --no-button "Advanced"; then
+    :
   else
-    STORAGE="$(pvesm status -content rootdir 2>/dev/null | awk 'NR>1{print $1; exit}')"
+    HOSTNAME_="$(ask "Hostname" "$HOSTNAME_")"
+    CTID="$(numv "$(ask "Container ID (CTID)" "$CTID")" "$CTID")"
+    UNPRIVILEGED="$(whiptail --title "TorHQ setup" --default-item "$UNPRIVILEGED" --menu "Container type" 11 60 2 \
+        1 "Unprivileged (recommended)" 0 "Privileged" 3>&1 1>&2 2>&3)" || cancel
+    CORES="$(numv "$(ask "CPU cores" "$CORES")" "$CORES")"
+    RAM_MB="$(numv "$(ask "RAM (MB)" "$RAM_MB")" "$RAM_MB")"
+    SWAP_MB="$(numv "$(ask "Swap (MB)" "$SWAP_MB")" "$SWAP_MB")"
+    DISK_GB="$(numv "$(ask "Root disk size (GB)" "$DISK_GB")" "$DISK_GB")"
+    STORAGE="$(pick_storage rootdir "Root filesystem storage" "$STORAGE")"
+    TEMPLATE_STORAGE="$(pick_storage vztmpl "Template storage (where the Debian template is downloaded)" "$TEMPLATE_STORAGE")"
+    BRIDGE="$(ask "Network bridge" "$BRIDGE")"
+    NETMODE="$(whiptail --title "TorHQ setup" --menu "IP assignment" 11 60 2 \
+        dhcp "Automatic (DHCP)" static "Manual (static IP)" 3>&1 1>&2 2>&3)" || cancel
+    if [[ "$NETMODE" == "static" ]]; then
+      NET="$(ask "Static address in CIDR (e.g. 192.168.1.50/24)" "")"
+      GATEWAY="$(ask "Gateway (e.g. 192.168.1.1)" "")"
+    else
+      NET="dhcp"
+    fi
+    BIND="$(ask "Address TorHQ binds to inside the container" "$BIND")"
+    BRANCH="$(ask "Git branch to install from" "$BRANCH")"
   fi
-  [[ -n "$STORAGE" ]] || die "no storage with 'rootdir' content found — set TORHQ_STORAGE."
 fi
 
-# Validate a static network config if requested.
+# ---- validate resolved settings -------------------------------------------
+pct status "$CTID" &>/dev/null && die "container $CTID already exists — pick a free id."
+[[ -n "$STORAGE" ]]          || die "no enabled 'rootdir' storage found — set TORHQ_STORAGE."
+[[ -n "$TEMPLATE_STORAGE" ]] || die "no enabled 'vztmpl' (template) storage found — enable one or set TORHQ_TEMPLATE_STORAGE."
+storage_enabled vztmpl "$TEMPLATE_STORAGE" || die "template storage '$TEMPLATE_STORAGE' is not enabled for container templates."
 if [[ "$NET" != "dhcp" ]]; then
-  [[ -n "$GATEWAY" ]] || die "a static TORHQ_NET ($NET) requires TORHQ_GW (gateway)."
+  [[ -n "$GATEWAY" ]] || die "a static network ($NET) requires a gateway (TORHQ_GW)."
   IPCONF="ip=${NET},gw=${GATEWAY}"
 else
   IPCONF="ip=dhcp"
@@ -79,6 +135,7 @@ ${BL}TorHQ Proxmox installer${NC}
   hostname         : ${HOSTNAME_}
   resources        : ${CORES} vCPU, ${RAM_MB} MB RAM, ${SWAP_MB} MB swap, ${DISK_GB} GB disk
   rootfs storage   : ${STORAGE}
+  template storage : ${TEMPLATE_STORAGE}
   network          : ${BRIDGE} (${IPCONF})
   unprivileged     : ${UNPRIVILEGED}
   source           : ${REPO_URL} @ ${BRANCH}
