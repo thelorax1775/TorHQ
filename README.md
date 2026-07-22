@@ -298,8 +298,13 @@ it is passed to git via a request header, so it is never written to disk. (If yo
 make the repo public, the plain `curl … raw.githubusercontent.com …` one-liner
 above works with no token.)
 
-The installer is non-interactive with sensible defaults, all overridable via
-environment variables:
+By default it shows an **interactive menu** (like the community-scripts
+installers): confirm the defaults, or choose **Advanced** to pick the container
+ID, resources, **storage location** (rootfs and template storage are listed from
+your *enabled* Proxmox storages), network (DHCP or a static IP), and more.
+
+For unattended runs, set the values via environment variables and
+`TORHQ_NONINTERACTIVE=1` to skip the menu. Every setting has an override:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -308,8 +313,9 @@ environment variables:
 | `TORHQ_DISK` | `8` | Root disk size (GB). |
 | `TORHQ_RAM` | `2048` | RAM (MB). |
 | `TORHQ_CORES` | `2` | vCPU count. |
-| `TORHQ_STORAGE` | auto (`local-lvm` if present) | Storage for the rootfs. |
-| `TORHQ_TEMPLATE_STORAGE` | `local` | Storage holding the LXC template. |
+| `TORHQ_STORAGE` | auto (first enabled `rootdir`; `local-lvm` if present) | Storage for the rootfs. |
+| `TORHQ_TEMPLATE_STORAGE` | auto (first enabled `vztmpl`) | Storage the Debian template is downloaded to. |
+| `TORHQ_NONINTERACTIVE` | *(unset)* | Set to `1` to skip the menu and use env/defaults only. |
 | `TORHQ_BRIDGE` | `vmbr0` | Network bridge. |
 | `TORHQ_NET` | `dhcp` | `dhcp` or a static CIDR (e.g. `192.168.1.50/24`). |
 | `TORHQ_GW` | *(none)* | Gateway — **required** for a static `TORHQ_NET`. |
