@@ -1,5 +1,22 @@
 import { describe, it, expect } from "vitest";
 import { mergeExtra, safeExtra, hasExtraConfig } from "../server/src/config/extra.js";
+import { loadEnv } from "../server/src/config/env.js";
+
+describe("env boolean parsing (env strings, not Boolean())", () => {
+  const base = { TORHQ_MASTER_KEY: "test-master-key-0123456789" } as any;
+  it("treats the string 'false' as false (the Secure-cookie bug)", () => {
+    const env = loadEnv({ ...base, TORHQ_COOKIE_SECURE: "false", TORHQ_TRUST_PROXY: "false" });
+    expect(env.TORHQ_COOKIE_SECURE).toBe(false);
+    expect(env.TORHQ_TRUST_PROXY).toBe(false);
+  });
+  it("treats 'true'/'1'/'yes' as true and everything else as false", () => {
+    expect(loadEnv({ ...base, TORHQ_COOKIE_SECURE: "true" }).TORHQ_COOKIE_SECURE).toBe(true);
+    expect(loadEnv({ ...base, TORHQ_COOKIE_SECURE: "1" }).TORHQ_COOKIE_SECURE).toBe(true);
+    expect(loadEnv({ ...base, TORHQ_COOKIE_SECURE: "yes" }).TORHQ_COOKIE_SECURE).toBe(true);
+    expect(loadEnv({ ...base, TORHQ_COOKIE_SECURE: "0" }).TORHQ_COOKIE_SECURE).toBe(false);
+    expect(loadEnv({ ...base }).TORHQ_COOKIE_SECURE).toBe(false); // unset
+  });
+});
 
 describe("typed extra config: mergeExtra", () => {
   it("coerces and stores a Kavita libraryId", () => {

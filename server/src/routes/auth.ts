@@ -14,7 +14,11 @@ const Credentials = z.object({
 export function authRoutes(app: FastifyInstance, ctx: AppContext): void {
   const cookieOpts = {
     httpOnly: true,
-    sameSite: "strict" as const,
+    // Lax (not Strict) so the session cookie is reliably stored and sent by
+    // browsers on same-site requests — including plain-HTTP access by LAN IP,
+    // where some browsers drop Strict cookies. CSRF is still enforced separately
+    // via the double-submit X-CSRF-Token header on every mutation.
+    sameSite: "lax" as const,
     secure: ctx.env.TORHQ_COOKIE_SECURE,
     path: "/",
   };
