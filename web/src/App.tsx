@@ -15,11 +15,23 @@ type Page = (typeof PAGES)[number];
 
 export function App() {
   const [me, setMe] = useState<Me | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState<Page>("Dashboard");
 
-  const refresh = () => api<Me>("/api/auth/me").then((m) => { setMe(m); setCsrf(m.csrfToken); });
+  const refresh = () =>
+    api<Me>("/api/auth/me")
+      .then((m) => { setMe(m); setCsrf(m.csrfToken); setError(null); })
+      .catch((e) => setError((e as Error).message));
   useEffect(() => { refresh(); }, []);
 
+  // Surface a reachability failure instead of hanging forever on "Loading…".
+  if (error && !me) return (
+    <div className="center muted" style={{ flexDirection: "column", gap: 12 }}>
+      <div>Can’t reach the TorHQ server.</div>
+      <div className="err-text small">{error}</div>
+      <button className="btn" onClick={() => { setError(null); refresh(); }}>Retry</button>
+    </div>
+  );
   if (!me) return <div className="center muted">Loading…</div>;
   if (!me.authenticated) return <Login needsSetup={me.needsSetup} onDone={refresh} />;
 

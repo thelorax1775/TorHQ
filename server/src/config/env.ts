@@ -1,6 +1,17 @@
 import { z } from "zod";
 
 /**
+ * Parse a boolean from an env string. NOTE: `z.coerce.boolean()` is wrong for
+ * env vars — it does `Boolean(value)`, so the string "false" (non-empty) becomes
+ * `true`. Here only explicit truthy tokens are true; anything else (including
+ * "false", "0", "", or unset) is false.
+ */
+const envBool = z.preprocess(
+  (v) => (typeof v === "string" ? ["1", "true", "yes", "on"].includes(v.trim().toLowerCase()) : v ?? false),
+  z.boolean(),
+);
+
+/**
  * Runtime environment. Only *infrastructure* config lives here (bind address,
  * data dir, master key, approved media roots). Per-service credentials are
  * stored encrypted in the database via the setup wizard, never in env.
@@ -18,11 +29,11 @@ const EnvSchema = z.object({
   // operations are validated to stay within one of these roots.
   TORHQ_APPROVED_ROOTS: z.string().default("/srv/torhq"),
   // Trust X-Forwarded-* headers (only enable behind a trusted reverse proxy).
-  TORHQ_TRUST_PROXY: z.coerce.boolean().default(false),
+  TORHQ_TRUST_PROXY: envBool,
   // Enable Prometheus /metrics endpoint (disabled by default).
-  TORHQ_METRICS_ENABLED: z.coerce.boolean().default(false),
+  TORHQ_METRICS_ENABLED: envBool,
   // Secure cookie flag; enable when served over HTTPS.
-  TORHQ_COOKIE_SECURE: z.coerce.boolean().default(false),
+  TORHQ_COOKIE_SECURE: envBool,
   TORHQ_LOG_LEVEL: z.enum(["fatal","error","warn","info","debug","trace"]).default("info"),
 });
 
