@@ -143,6 +143,22 @@ describe("durable queue + worker", () => {
     expect(existsSync(libDir("libraries", "manga", "Worker Series"))).toBe(true);
   });
 
+  it("recovers a job orphaned in 'running' by a prior crash", async () => {
+    const src = makeSource("Crashed Series");
+    const job = enqueue({ type: "manual_intake", payload: { libraryKey: "kavita-manga", sourcePath: src } });
+    // Simulate a crash mid-process: the job is stuck in 'running'.
+    getDb().update(jobs).set({ status: "running" }).where(eq(jobs.id, job.id)).run();
+
+    const worker = new Worker([root], masterKey);
+    const recovered = worker.recoverOrphans();
+    expect(recovered).toBe(1);
+    expect(getJob(job.id)!.status).toBe("queued");
+
+    await worker.tick();
+    expect(getJob(job.id)!.status).toBe("completed");
+    expect(existsSync(libDir("libraries", "manga", "Crashed Series"))).toBe(true);
+  });
+
   it("re-queues a failing job with backoff, then marks it dead at maxAttempts", async () => {
     // Non-existent source and no destination → each attempt fails.
     const job = enqueue({
