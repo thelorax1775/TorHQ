@@ -92,6 +92,35 @@ describe("auth flow + CSRF", () => {
   });
 });
 
+describe("typed extra config over the API", () => {
+  let cookie = "", csrf = "";
+  beforeAll(async () => {
+    const r = await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "admin", password: "supersecret1" } });
+    csrf = r.json().csrfToken;
+    cookie = r.cookies[0].name + "=" + r.cookies[0].value;
+  });
+  it("stores a slskd webhook token but never returns it", async () => {
+    const save = await app.inject({
+      method: "POST", url: "/api/services", headers: { cookie, "x-csrf-token": csrf },
+      payload: { kind: "slskd", label: "slskd", baseUrl: "http://localhost:5030", secret: "k", extra: { webhookToken: "topsecrettoken" } },
+    });
+    expect(save.statusCode).toBe(200);
+    const list = await app.inject({ method: "GET", url: "/api/services", headers: { cookie } });
+    const slskd = list.json().services.find((s: any) => s.kind === "slskd");
+    expect(slskd.extra).toEqual({ webhookTokenSet: true });
+    expect(JSON.stringify(slskd)).not.toContain("topsecrettoken");
+  });
+  it("round-trips a non-secret kavita libraryId", async () => {
+    await app.inject({
+      method: "POST", url: "/api/services", headers: { cookie, "x-csrf-token": csrf },
+      payload: { kind: "kavita", label: "kavita", baseUrl: "http://localhost:5000", secret: "k", extra: { libraryId: 7 } },
+    });
+    const list = await app.inject({ method: "GET", url: "/api/services", headers: { cookie } });
+    const kavita = list.json().services.find((s: any) => s.kind === "kavita");
+    expect(kavita.extra).toEqual({ libraryId: 7 });
+  });
+});
+
 describe("intake path validation via API", () => {
   let cookie = "", csrf = "";
   beforeAll(async () => {
