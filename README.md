@@ -377,6 +377,13 @@ TORHQ_NONINTERACTIVE=1 \
 > container on the dashboard (**Network mounts**), read-only — it never mounts
 > anything itself.
 
+To remove a share cleanly (host unmount + fstab entry + container bind mount +
+SMB credentials), run the companion helper on the host:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/TorHQ/main/scripts/unmount-share.sh)"
+```
+
 ### Manual install (inside an existing LXC)
 
 ```bash
