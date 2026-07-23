@@ -220,6 +220,30 @@ pct push "$CTID" "$PROVISION" /root/torhq-provision.sh --perms 0755 >/dev/null
 pct exec "$CTID" -- bash /root/torhq-provision.sh
 pct exec "$CTID" -- rm -f /root/torhq-provision.sh || true
 
+# ---- optional: mount a NAS share now --------------------------------------
+# Reuse the just-cloned mount-share.sh (works for private repos too — no refetch).
+# Runs interactively if there's a TTY, or unattended when TORHQ_SHARE_REMOTE is set.
+DO_MOUNT=0
+if [[ "$INTERACTIVE" -eq 1 ]]; then
+  whiptail --title "TorHQ installer" --yesno \
+    "Set up an NFS/SMB share now (for storing downloads)?\n\nYou can always do this later with scripts/mount-share.sh." \
+    11 70 && DO_MOUNT=1 || DO_MOUNT=0
+elif [[ -n "${TORHQ_SHARE_REMOTE:-}" ]]; then
+  DO_MOUNT=1
+fi
+if [[ "$DO_MOUNT" -eq 1 ]]; then
+  info "Setting up a network share"
+  MSH="$(mktemp)"
+  if pct pull "$CTID" /opt/torhq-src/scripts/mount-share.sh "$MSH" >/dev/null 2>&1; then
+    # Default the bind target to this new container unless another CTID was given.
+    TORHQ_TARGET_CTID="${TORHQ_TARGET_CTID:-$CTID}" bash "$MSH" \
+      || warn "share setup did not complete — re-run scripts/mount-share.sh on the host later."
+  else
+    warn "could not extract mount-share.sh from the container; set up the share later."
+  fi
+  rm -f "$MSH"
+fi
+
 cat <<DONE
 
 ${GN}TorHQ is up.${NC}

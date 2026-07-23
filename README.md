@@ -344,8 +344,12 @@ TORHQ_NET=192.168.1.50/24 TORHQ_GW=192.168.1.1 TORHQ_RAM=4096 TORHQ_DISK=16 \
 
 To store downloads on a NAS, mount the share **on the Proxmox host** and bind it
 into the container that runs qBittorrent. This is the right pattern for
-unprivileged LXCs, which can't mount network filesystems themselves. A host
-helper does it for you:
+unprivileged LXCs, which can't mount network filesystems themselves.
+
+The one-line installer above **offers to set up a share during provisioning**
+(interactively, or unattended when the `TORHQ_SHARE_*` variables below are set —
+`TORHQ_TARGET_CTID` defaults to the new container). You can also run the host
+helper any time:
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/TorHQ/main/scripts/mount-share.sh)"
