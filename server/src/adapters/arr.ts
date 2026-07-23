@@ -174,6 +174,24 @@ export class ArrAdapter implements ServiceAdapter {
     };
   }
 
+  /** Fire an *arr command (e.g. RefreshMonitoredDownloads). */
+  async command(name: string, extra: Record<string, unknown> = {}): Promise<{ id?: number }> {
+    return httpJson(this.cfg.baseUrl, this.api("command"), {
+      method: "POST", headers: this.hdr(), body: { name, ...extra },
+    });
+  }
+
+  /**
+   * Nudge the *arr to poll its download client and import completed downloads
+   * now, rather than waiting for its next interval. Used after TorHQ pushes a
+   * magnet into the *arr's qBittorrent category: the *arr still owns the import,
+   * TorHQ just asks it to look. (The item must be added + monitored in the *arr,
+   * with Completed Download Handling enabled, for the import to happen.)
+   */
+  async processDownloads(): Promise<void> {
+    await this.command("RefreshMonitoredDownloads");
+  }
+
   async qualityProfiles(): Promise<Array<{ id: number; name: string }>> {
     return httpJson(this.cfg.baseUrl, this.api("qualityprofile"), { headers: this.hdr() });
   }

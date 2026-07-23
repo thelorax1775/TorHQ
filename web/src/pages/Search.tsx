@@ -48,11 +48,11 @@ export function Search() {
   async function grab(i: number, r: Result, category: string) {
     setGrabState((s) => ({ ...s, [i]: "Sending…" }));
     try {
-      const res = await api<{ category: string }>("/api/search/grab", {
+      const res = await api<{ category: string; importTriggered?: boolean }>("/api/search/grab", {
         method: "POST",
         body: JSON.stringify({ magnet: r.magnet, title: r.title, category }),
       });
-      setGrabState((s) => ({ ...s, [i]: `Sent → ${res.category}` }));
+      setGrabState((s) => ({ ...s, [i]: `Sent → ${res.category}${res.importTriggered ? " · import triggered" : ""}` }));
     } catch (e) {
       setGrabState((s) => ({ ...s, [i]: `Error: ${(e as Error).message}` }));
     }

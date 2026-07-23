@@ -378,6 +378,7 @@ export const openApiDoc = {
         responses: {
           "200": { description: "Grabbed", content: { "application/json": { schema: { type: "object", properties: {
             ok: { type: "boolean" }, category: { type: "string" },
+            importTriggered: { type: "boolean", description: "Whether the matching *arr was nudged to import the download." },
           } } } } },
           "400": errorResponse("invalid magnet / category"),
           "409": errorResponse("qBittorrent not configured"),

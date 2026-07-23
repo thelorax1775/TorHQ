@@ -3,8 +3,12 @@ import { z } from "zod";
 import { getAdapter } from "../adapters/registry.js";
 import type { TorrentSearchAdapter } from "../adapters/torrentsearch.js";
 import type { QbittorrentAdapter } from "../adapters/qbittorrent.js";
+import type { ArrAdapter } from "../adapters/arr.js";
 import { logActivity } from "../lib/activity.js";
 import type { AppContext } from "../lib/context.js";
+
+// *arr categories whose grabs TorHQ nudges to import once the download lands.
+const ARR_CATEGORY = { radarr: "radarr", sonarr: "sonarr", lidarr: "lidarr" } as const;
 
 const SearchQuery = z.object({
   q: z.string().min(1).max(256),
@@ -49,13 +53,27 @@ export function searchRoutes(app: FastifyInstance, ctx: AppContext): void {
     const category = body.category ?? "torhq-manual";
     try {
       await qb.addTorrent({ url: body.magnet, category });
+
+      // Close the loop: if this grab is for an *arr, ask that *arr to process
+      // its download client now so it identifies + imports the download. The
+      // *arr still owns the import; this is best-effort and never fails the grab.
+      let importTriggered = false;
+      if (category in ARR_CATEGORY) {
+        const arr = getAdapter(category, ctx.masterKey) as ArrAdapter | null;
+        if (arr) {
+          try { await arr.processDownloads(); importTriggered = true; }
+          catch (e) { req.log.warn({ err: e, category }, "arr import trigger failed"); }
+        }
+      }
+
       logActivity({
         kind: "queued",
         service: "qbittorrent",
-        message: `Sent "${body.title ?? "torrent"}" to qBittorrent (${category})`,
-        data: { category },
+        message: `Sent "${body.title ?? "torrent"}" to qBittorrent (${category})`
+          + (importTriggered ? ` and triggered ${category} import` : ""),
+        data: { category, importTriggered },
       });
-      return { ok: true, category };
+      return { ok: true, category, importTriggered };
     } catch (e) {
       return reply.code(502).send({ error: (e as Error).message });
     }

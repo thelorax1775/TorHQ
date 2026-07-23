@@ -8,9 +8,10 @@ import { Requests } from "./pages/Requests.js";
 import { Search } from "./pages/Search.js";
 import { Intake } from "./pages/Intake.js";
 import { Jobs } from "./pages/Jobs.js";
+import { Mounts } from "./pages/Mounts.js";
 
 type Me = { authenticated: boolean; needsSetup: boolean; csrfToken: string | null };
-const PAGES = ["Dashboard", "Search", "Requests", "Intake", "Jobs", "Services", "Libraries"] as const;
+const PAGES = ["Dashboard", "Search", "Requests", "Intake", "Jobs", "Services", "Libraries", "Mounts"] as const;
 type Page = (typeof PAGES)[number];
 
 export function App() {
@@ -54,6 +55,7 @@ export function App() {
         {page === "Jobs" && <Jobs />}
         {page === "Services" && <Services />}
         {page === "Libraries" && <Libraries />}
+        {page === "Mounts" && <Mounts />}
       </main>
     </div>
   );

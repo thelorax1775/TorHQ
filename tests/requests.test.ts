@@ -94,6 +94,22 @@ describe("addSelected never adds the first hit", () => {
   });
 });
 
+describe("processDownloads closes the import loop", () => {
+  it("POSTs RefreshMonitoredDownloads to the *arr command endpoint", async () => {
+    httpJson.mockResolvedValue({ id: 1 });
+    await new ArrAdapter("radarr", cfg).processDownloads();
+    const call = httpJson.mock.calls.find((c) => String(c[1]).endsWith("/command"))!;
+    expect(call[1]).toBe("/api/v3/command");
+    expect(call[2].method).toBe("POST");
+    expect(call[2].body).toEqual({ name: "RefreshMonitoredDownloads" });
+  });
+  it("uses the Sonarr/Lidarr API versions too", async () => {
+    httpJson.mockResolvedValue({});
+    await new ArrAdapter("lidarr", cfg).processDownloads();
+    expect(httpJson.mock.calls.at(-1)![1]).toBe("/api/v1/command");
+  });
+});
+
 describe("Lidarr flavor-specific add", () => {
   it("requires a metadataProfileId", async () => {
     httpJson.mockResolvedValue([{ artistName: "Radiohead", foreignArtistId: "mbid-1" }]);
