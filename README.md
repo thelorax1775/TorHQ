@@ -154,6 +154,14 @@ magnet straight to qBittorrent. It is intentionally simple and explicit:
 Only well-formed `magnet:?xt=urn:btih:<hash>` links are accepted, and the grab
 category is restricted to a fixed allowlist.
 
+**Closing the loop with the \*arr.** When you grab into a `radarr`/`sonarr`/`lidarr`
+category, TorHQ immediately asks that \*arr to process its download client
+(`RefreshMonitoredDownloads`) so it identifies and imports the download without
+waiting — the \*arr still owns the import. For this to result in an import, the
+item must be **added and monitored** in the \*arr (e.g. via the **Requests** page)
+with qBittorrent configured as its download client and Completed Download
+Handling enabled. Raw `torhq-manual` grabs are left for you to organize.
+
 ### Configuring a mirror (and why it's fragile)
 
 Public torrent-index mirrors rot constantly — domains change, markup drifts, and
