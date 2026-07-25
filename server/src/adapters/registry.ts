@@ -47,13 +47,29 @@ export async function testConfig(kind: string, cfg: AdapterConfig): Promise<Heal
 }
 
 /** Health-check all configured services; persists last status. */
+/** Coerce whatever an upstream called a "version" into something renderable. */
+function versionString(v: unknown): string | undefined {
+  if (v === null || v === undefined) return undefined;
+  if (typeof v === "string") return v || undefined;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  const o = v as Record<string, unknown>;
+  for (const field of ["current", "full", "version"]) {
+    if (typeof o[field] === "string") return o[field] as string;
+  }
+  return undefined;
+}
+
 export async function checkAllHealth(kinds: string[], masterKey: Buffer): Promise<Record<string, HealthResult>> {
   const out: Record<string, HealthResult> = {};
   await Promise.all(kinds.map(async (kind) => {
     const a = getAdapter(kind, masterKey);
     if (!a) { out[kind] = { healthy: false, detail: "not configured" }; return; }
     const h = await (a as ServiceAdapter).health();
-    out[kind] = h;
+    // Adapters read `version` out of someone else's JSON, so its shape is not
+    // ours to trust: slskd started returning an object and the dashboard, which
+    // renders the value directly, threw and took the whole SPA down with it.
+    // Normalising here means one place has to be right instead of nine.
+    out[kind] = { ...h, version: versionString(h.version) };
     setServiceHealth(kind, h.healthy, h.detail ?? (h.healthy ? "ok" : "error"));
   }));
   return out;

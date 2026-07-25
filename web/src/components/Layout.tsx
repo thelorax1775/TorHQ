@@ -5,6 +5,7 @@
  */
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { ErrorBoundary } from "./ErrorBoundary.js";
 import { Icon, type IconName } from "./Icon.js";
 import { Button } from "./ui.js";
 import { usePolled } from "../lib/usePolled.js";
@@ -134,7 +135,11 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
           )}
         </header>
         <main className="content">
-          <Outlet />
+          {/* Keyed on the path so navigating away clears a failed render, and so
+              the boundary is scoped to one page rather than the whole session. */}
+          <ErrorBoundary key={location.pathname}>
+            <Outlet />
+          </ErrorBoundary>
         </main>
       </div>
     </div>

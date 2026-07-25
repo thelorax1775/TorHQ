@@ -16,7 +16,12 @@ export class SlskdAdapter implements ServiceAdapter {
     const start = Date.now();
     try {
       const v = await httpJson<any>(this.cfg.baseUrl, "/api/v0/application", { headers: this.hdr() });
-      return { healthy: true, version: v?.version, latencyMs: Date.now() - start };
+      // slskd used to report a bare version string; 0.25 returns an object
+      // ({ full, current, latest, ... }). Pick the readable field rather than
+      // handing the caller something that is not a string.
+      const ver = v?.version;
+      const version = typeof ver === "string" ? ver : (ver?.current ?? ver?.full);
+      return { healthy: true, version, latencyMs: Date.now() - start };
     } catch (e) {
       return { healthy: false, detail: (e as Error).message, latencyMs: Date.now() - start };
     }
