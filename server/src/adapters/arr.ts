@@ -7,15 +7,71 @@ import type { AdapterConfig, ArrActivity, ArrCandidate, ArrItem, HealthResult, S
  * metadataProfileId and monitors albums, not episodes). This adapter keeps
  * those differences explicit rather than pretending all three are identical.
  *
- * FUNCTIONAL: health, wanted/missing, history, search-candidates, and
- * add-selected. TorHQ only *requests*: the *arr owns search, grab, import,
- * rename, and final placement — TorHQ never touches its files.
+ * FUNCTIONAL: health, wanted/missing, history, search-candidates, add-selected,
+ * the download queue, and download-client configuration. TorHQ only *requests*:
+ * the *arr owns search, grab, import, rename, and final placement — TorHQ never
+ * touches its files.
  */
 export type ArrFlavor = "radarr" | "sonarr" | "lidarr";
 
 const API_VERSION: Record<ArrFlavor, string> = { radarr: "v3", sonarr: "v3", lidarr: "v1" };
 /** Primary resource noun used for lookup + add. */
 const RESOURCE: Record<ArrFlavor, string> = { radarr: "movie", sonarr: "series", lidarr: "artist" };
+
+/**
+ * Queue query parameters differ per flavor: each *arr names the "include the
+ * items I can't match to a library entry" flag after its own primary resource,
+ * and unknown items are exactly the ones a broken pipeline leaves behind — so
+ * they must be asked for explicitly.
+ */
+const QUEUE_PARAMS: Record<ArrFlavor, Record<string, boolean>> = {
+  radarr: { includeUnknownMovieItems: true, includeMovie: true },
+  sonarr: { includeUnknownSeriesItems: true, includeSeries: true, includeEpisode: true },
+  lidarr: { includeUnknownArtistItems: true, includeArtist: true, includeAlbum: true },
+};
+
+/**
+ * "Scan this completed download folder now" — the flavor-specific command. The
+ * *arr does the moving/renaming; TorHQ only asks.
+ */
+const SCAN_COMMAND: Record<ArrFlavor, string> = {
+  radarr: "DownloadedMoviesScan",
+  sonarr: "DownloadedEpisodesScan",
+  lidarr: "DownloadedAlbumsScan",
+};
+
+/** One *arr queue record, normalized across the three flavors. */
+export interface ArrQueueItem {
+  service: ArrFlavor;
+  id: number;
+  title: string;
+  status: string;
+  /** ok | warning | error — the *arr's own verdict on the download. */
+  trackedDownloadStatus?: string;
+  /** downloading | importPending | importBlocked | imported | failed | … */
+  trackedDownloadState?: string;
+  errorMessage?: string;
+  /** Flattened `statusMessages[].messages`; where import failures actually say why. */
+  statusMessages: string[];
+  size: number;
+  sizeleft: number;
+  /** The download client's id for this grab — a torrent hash for qBittorrent. */
+  downloadId?: string;
+  /** Where the download client put the data, as the *arr sees it. */
+  outputPath?: string;
+  /** ISO timestamp; absent on older *arr builds. */
+  added?: string;
+}
+
+/** A download client as configured inside an *arr. */
+export interface ArrDownloadClient {
+  id: number;
+  name: string;
+  implementation: string;
+  enable: boolean;
+  /** Flattened `fields[]`, e.g. `{ host, port, category, urlBase }`. */
+  fields: Record<string, unknown>;
+}
 
 export interface AddSelectedInput {
   term: string;
@@ -73,6 +129,75 @@ export class ArrAdapter implements ServiceAdapter {
       title: r.sourceTitle ?? r.title ?? "",
       date: r.date,
     }));
+  }
+
+  /**
+   * The *arr's view of what its download client is doing. This is where an
+   * import that never happened shows up: `trackedDownloadStatus` goes to
+   * warning/error and `statusMessages` carries the reason.
+   */
+  async queue(pageSize = 200): Promise<ArrQueueItem[]> {
+    const res = await httpJson<{ records?: any[] } | any[]>(this.cfg.baseUrl, this.api("queue"), {
+      headers: this.hdr(),
+      query: { page: 1, pageSize, ...QUEUE_PARAMS[this.kind] },
+    });
+    // Paged on current builds; a bare array on older ones.
+    const records = Array.isArray(res) ? res : res.records ?? [];
+    return records.map((r) => this.normalizeQueueItem(r));
+  }
+
+  private normalizeQueueItem(r: any): ArrQueueItem {
+    return {
+      service: this.kind,
+      id: r.id,
+      title: r.title ?? r.movie?.title ?? r.series?.title ?? r.album?.title ?? r.artist?.artistName ?? "unknown",
+      status: r.status ?? "unknown",
+      trackedDownloadStatus: r.trackedDownloadStatus,
+      trackedDownloadState: r.trackedDownloadState,
+      errorMessage: r.errorMessage || undefined,
+      statusMessages: flattenStatusMessages(r.statusMessages),
+      size: r.size ?? 0,
+      sizeleft: r.sizeleft ?? 0,
+      downloadId: r.downloadId || undefined,
+      outputPath: r.outputPath || undefined,
+      added: r.added || undefined,
+    };
+  }
+
+  /**
+   * Drop a record from the *arr's queue. `removeFromClient` also deletes it in
+   * the download client; `blocklist` tells the *arr never to grab that release
+   * again. Both are the caller's explicit choice.
+   */
+  async removeFromQueue(id: number, opts: { removeFromClient: boolean; blocklist: boolean }): Promise<void> {
+    await httpJson(this.cfg.baseUrl, this.api(`queue/${id}`), {
+      method: "DELETE",
+      headers: this.hdr(),
+      // Older builds spell it `blacklist`; sending both keeps one call working
+      // across generations (the *arr ignores the parameter it doesn't know).
+      query: {
+        removeFromClient: opts.removeFromClient,
+        blocklist: opts.blocklist,
+        blacklist: opts.blocklist,
+      },
+    });
+  }
+
+  /** Download clients configured *inside* the *arr (not TorHQ's own config). */
+  async downloadClients(): Promise<ArrDownloadClient[]> {
+    const res = await httpJson<any[]>(this.cfg.baseUrl, this.api("downloadclient"), { headers: this.hdr() });
+    return (Array.isArray(res) ? res : []).map((c) => ({
+      id: c.id,
+      name: c.name ?? "",
+      implementation: c.implementation ?? "",
+      enable: c.enable ?? false,
+      fields: Object.fromEntries((c.fields ?? []).map((f: any) => [f.name, f.value])),
+    }));
+  }
+
+  /** Download-handling config — notably `enableCompletedDownloadHandling`. */
+  async downloadClientConfig(): Promise<{ enableCompletedDownloadHandling?: boolean; autoRedownloadFailed?: boolean }> {
+    return httpJson(this.cfg.baseUrl, this.api("config/downloadclient"), { headers: this.hdr() });
   }
 
   private lookupPath(): string { return this.api(`${RESOURCE[this.kind]}/lookup`); }
@@ -192,11 +317,29 @@ export class ArrAdapter implements ServiceAdapter {
     await this.command("RefreshMonitoredDownloads");
   }
 
+  /**
+   * Ask the *arr to import a completed download it already owns. With a known
+   * `outputPath` we point its own scanner straight at that folder (the precise
+   * call, and the one that reports back per-file); without one we fall back to a
+   * full download-client refresh. Either way the *arr does the moving and
+   * renaming — TorHQ never touches the files.
+   */
+  async rescanDownload(input: { outputPath?: string; downloadId?: string }): Promise<{ command: string }> {
+    if (!input.outputPath) {
+      await this.command("RefreshMonitoredDownloads");
+      return { command: "RefreshMonitoredDownloads" };
+    }
+    const name = SCAN_COMMAND[this.kind];
+    // No importMode: the *arr's configured copy/hardlink behaviour stays authoritative.
+    await this.command(name, { path: input.outputPath, downloadClientId: input.downloadId });
+    return { command: name };
+  }
+
   async qualityProfiles(): Promise<Array<{ id: number; name: string }>> {
     return httpJson(this.cfg.baseUrl, this.api("qualityprofile"), { headers: this.hdr() });
   }
 
-  async rootFolders(): Promise<Array<{ id: number; path: string }>> {
+  async rootFolders(): Promise<Array<{ id: number; path: string; accessible?: boolean; freeSpace?: number }>> {
     return httpJson(this.cfg.baseUrl, this.api("rootfolder"), { headers: this.hdr() });
   }
 
@@ -205,6 +348,22 @@ export class ArrAdapter implements ServiceAdapter {
     if (this.kind !== "lidarr") return [];
     return httpJson(this.cfg.baseUrl, this.api("metadataprofile"), { headers: this.hdr() });
   }
+}
+
+/**
+ * `statusMessages` is `[{ title, messages[] }]` — the title is usually the file
+ * and the messages the reason it could not be imported. Flatten to plain lines,
+ * keeping the title when it carries the only information.
+ */
+function flattenStatusMessages(raw: any): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const m of raw) {
+    const messages = Array.isArray(m?.messages) ? m.messages.filter((s: unknown) => typeof s === "string" && s) : [];
+    if (messages.length) out.push(...messages);
+    else if (typeof m?.title === "string" && m.title) out.push(m.title);
+  }
+  return [...new Set(out)];
 }
 
 function pickPoster(images: any): string | undefined {
