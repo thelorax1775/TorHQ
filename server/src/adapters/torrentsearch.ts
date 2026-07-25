@@ -113,15 +113,7 @@ export class TorrentSearchAdapter implements ServiceAdapter {
     const start = Date.now();
     if (this.flaresolverrUrl) {
       try {
-        const res = await request(solverEndpoint(this.flaresolverrUrl), {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ cmd: "sessions.list" }),
-          headersTimeout: SOLVER_PING_TIMEOUT_MS,
-          bodyTimeout: SOLVER_PING_TIMEOUT_MS,
-        });
-        await readCapped(res.body);
-        if (res.statusCode >= 400) throw new Error(`HTTP ${res.statusCode}`);
+        await pingSolver(this.flaresolverrUrl);
         return {
           healthy: true,
           detail: "challenge solver reachable — the mirror itself is exercised on a real search",
@@ -283,6 +275,25 @@ function absolutizeSameOrigin(href: string, baseUrl: string): string | null {
  * `http://host:8191` and `http://host:8191/`. Getting this wrong silently POSTs
  * to the wrong path and reads as "the solver is broken".
  */
+/**
+ * Confirm the solver is up, in one cheap round-trip to its root.
+ *
+ * Any HTTP reply at all is the answer we want — the question is whether the
+ * service is listening and serving, not whether it can defeat a challenge. The
+ * deeper endpoints are traps for a check that runs on a timer: Byparr's
+ * `/health` drives a real browser and costs ~6s, while `sessions.list` (which
+ * FlareSolverr answers) returns 500 there. `GET /` costs about 3ms on both.
+ * A real search is what reports an unhealthy solver, and it reports it properly.
+ */
+async function pingSolver(baseUrl: string): Promise<void> {
+  const res = await request(baseUrl, {
+    method: "GET",
+    headersTimeout: SOLVER_PING_TIMEOUT_MS,
+    bodyTimeout: SOLVER_PING_TIMEOUT_MS,
+  });
+  await readCapped(res.body);
+}
+
 export function solverEndpoint(baseUrl: string): string {
   return new URL("v1", baseUrl.endsWith("/") ? baseUrl : baseUrl + "/").toString();
 }

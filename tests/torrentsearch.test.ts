@@ -107,32 +107,49 @@ describe("health is cheap when a solver is configured", () => {
   // with a solver means launching a browser for 15-45s. The sources page polls
   // it every 60s, so an open tab started a browser a minute until the solver's
   // host fell over. It must talk to the solver, never through it.
-  it("never asks the solver to fetch the mirror", async () => {
-    const seen: Array<Record<string, unknown>> = [];
+  /** A stand-in solver that records what was asked of it. */
+  async function fakeSolver(handler: (path: string, body: string) => { status: number; body: string }) {
+    const seen: Array<{ path: string; body: string }> = [];
     const server = createServer((req, res) => {
       let body = "";
       req.on("data", (c) => { body += c; });
       req.on("end", () => {
-        seen.push(JSON.parse(body || "{}"));
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ status: "ok", sessions: [] }));
+        seen.push({ path: req.url ?? "", body });
+        const r = handler(req.url ?? "", body);
+        res.writeHead(r.status, { "content-type": "application/json" });
+        res.end(r.body);
       });
     });
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     const { port } = server.address() as AddressInfo;
+    return { seen, port, close: () => server.close() };
+  }
 
-    const adapter = new TorrentSearchAdapter({
-      baseUrl: "https://example.invalid",
-      secret: "",
-      extra: { flaresolverrUrl: `http://127.0.0.1:${port}` },
-    });
-    const h = await adapter.health();
-    server.close();
+  const adapterFor = (port: number) => new TorrentSearchAdapter({
+    baseUrl: "https://example.invalid",
+    secret: "",
+    extra: { flaresolverrUrl: `http://127.0.0.1:${port}` },
+  });
+
+  it("never asks the solver to fetch the mirror", async () => {
+    const solver = await fakeSolver(() => ({ status: 200, body: "{}" }));
+    const h = await adapterFor(solver.port).health();
+    solver.close();
 
     expect(h.healthy).toBe(true);
-    expect(seen).toHaveLength(1);
-    expect(seen[0]!.cmd).toBe("sessions.list"); // not request.get
-    expect(JSON.stringify(seen[0])).not.toContain("example.invalid");
+    expect(solver.seen).toHaveLength(1);
+    // The mirror, and any instruction to fetch it, must appear nowhere.
+    expect(JSON.stringify(solver.seen)).not.toContain("example.invalid");
+    expect(JSON.stringify(solver.seen)).not.toContain("request.get");
+  });
+
+  // Byparr redirects / to its docs and returns 500 for sessions.list; neither
+  // means it is down. Only a connection that fails does.
+  it.each([200, 301, 404, 500])("treats HTTP %i from the solver as alive", async (status) => {
+    const solver = await fakeSolver(() => ({ status, body: "{}" }));
+    const h = await adapterFor(solver.port).health();
+    solver.close();
+    expect(h.healthy).toBe(true);
   });
 
   it("reports the source down when the solver is unreachable", async () => {
