@@ -211,7 +211,9 @@ export function parseIdList(value: unknown): number[] {
   if (typeof value !== "string") return [];
   return value
     .split(",")
-    .map((p) => Number(p.trim()))
+    .map((p) => p.trim())
+    .filter((p) => p !== "") // Number("") is 0, which would add a phantom id 0
+    .map((p) => Number(p))
     .filter((n) => Number.isInteger(n) && n >= 0);
 }
 
@@ -244,6 +246,9 @@ function dedupeCategories(cats: ProwlarrCategory[]): ProwlarrCategory[] {
 }
 
 function numOrNull(v: unknown): number | null {
+  // Guard the empty cases first: Number(null) and Number("") are both 0, which
+  // would report "no seeders" as "zero seeders" — a different claim.
+  if (v === null || v === undefined || v === "") return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
