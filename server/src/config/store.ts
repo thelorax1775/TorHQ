@@ -1,6 +1,6 @@
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { getDb } from "../db/index.js";
-import { services, libraries, type Service, type Library } from "../db/schema.js";
+import { services, libraries, jobs, type Service, type Library } from "../db/schema.js";
 import { encryptSecret, decryptSecret, maskSecret } from "../lib/crypto.js";
 import { mergeExtra, safeExtra } from "./extra.js";
 
@@ -102,4 +102,21 @@ export function listLibraries(): Library[] {
 
 export function getLibrary(key: string): Library | undefined {
   return getDb().select().from(libraries).where(eq(libraries.key, key)).get();
+}
+
+/**
+ * Forget a destination library. Returns false when there was nothing to remove.
+ * Only the definition goes — no file on disk is touched, and completed jobs keep
+ * their `libraryKey` as a record of where content actually went.
+ */
+export function deleteLibrary(key: string): boolean {
+  return getDb().delete(libraries).where(eq(libraries.key, key)).run().changes > 0;
+}
+
+/** Jobs that would be left pointing at nothing if this library disappeared. */
+export function activeJobsForLibrary(key: string): number {
+  const rows = getDb().select().from(jobs)
+    .where(and(eq(jobs.libraryKey, key), inArray(jobs.status, ["queued", "running"])))
+    .all();
+  return rows.length;
 }

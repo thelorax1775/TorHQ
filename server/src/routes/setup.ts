@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
   SERVICE_KINDS, listServicesSafe, upsertService,
-  listLibraries, upsertLibrary,
+  listLibraries, upsertLibrary, getLibrary, deleteLibrary, activeJobsForLibrary,
 } from "../config/store.js";
 import { testConfig } from "../adapters/registry.js";
 import { safeResolve } from "../security/paths.js";
@@ -26,6 +26,8 @@ const LibraryInput = z.object({
   stagingPath: z.string().min(1),
   rescan: z.boolean().optional(),
 });
+
+const LibraryKeyParam = z.object({ key: z.string().min(1).max(64).regex(/^[a-z0-9-]+$/) });
 
 export function setupRoutes(app: FastifyInstance, ctx: AppContext): void {
   const guard = { preHandler: [app.requireAuth, app.requireCsrf] };
@@ -71,6 +73,26 @@ export function setupRoutes(app: FastifyInstance, ctx: AppContext): void {
       return reply.code(400).send({ error: (e as Error).message });
     }
     upsertLibrary({ ...body, rescan: body.rescan ?? true });
+    return { ok: true };
+  });
+
+  /**
+   * Remove a library definition. Refused while intake jobs are still queued or
+   * running against it, because those jobs resolve their destination by key and
+   * would fail at the point of import instead of here, where the cause is clear.
+   * Nothing on disk is touched either way.
+   */
+  app.delete("/api/libraries/:key", guard, async (req, reply) => {
+    const { key } = LibraryKeyParam.parse(req.params);
+    if (!getLibrary(key)) return reply.code(404).send({ error: `no library named ${key}` });
+
+    const active = activeJobsForLibrary(key);
+    if (active > 0) {
+      return reply.code(409).send({
+        error: `${active} intake job${active === 1 ? " is" : "s are"} still queued against ${key}`,
+      });
+    }
+    deleteLibrary(key);
     return { ok: true };
   });
 

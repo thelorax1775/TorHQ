@@ -12,7 +12,7 @@ import { apiSend } from "../lib/api.js";
 import { useMutation } from "../lib/useMutation.js";
 import { usePolled } from "../lib/usePolled.js";
 import {
-  Alert, Async, Badge, Button, Card, Checkbox, EmptyState, PageHeader,
+  Alert, Async, Badge, Button, Card, Checkbox, ConfirmDialog, EmptyState, PageHeader,
   RefreshButton, SelectField, TableWrap, TextField,
 } from "../components/ui.js";
 
@@ -46,9 +46,15 @@ export function Libraries() {
 
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [editing, setEditing] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState<Library | null>(null);
 
   const save = useMutation(
     (body: Library) => apiSend<{ ok: true }>("/api/libraries", "POST", body),
+    { invalidates: ["/api/libraries"] },
+  );
+
+  const remove = useMutation(
+    (lib: Library) => apiSend<{ ok: true }>(`/api/libraries/${encodeURIComponent(lib.key)}`, "DELETE"),
     { invalidates: ["/api/libraries"] },
   );
 
@@ -114,8 +120,16 @@ export function Libraries() {
                         <td className="truncate mono small" style={{ maxWidth: 260 }} title={l.destPath}>{l.destPath}</td>
                         <td className="truncate mono small" style={{ maxWidth: 220 }} title={l.stagingPath}>{l.stagingPath}</td>
                         <td className="nowrap">{l.rescan ? "Yes" : "No"}</td>
-                        <td className="shrink">
+                        <td className="shrink row-nowrap">
                           <Button size="sm" variant="ghost" icon="settings" title="Edit" aria-label={`Edit ${l.label}`} onClick={() => startEdit(l)} />
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            icon="trash"
+                            title="Remove"
+                            aria-label={`Remove ${l.label}`}
+                            onClick={() => { remove.reset(); setConfirmRemove(l); }}
+                          />
                         </td>
                       </tr>
                     ))}
@@ -196,6 +210,34 @@ export function Libraries() {
           </div>
         </form>
       </Card>
+
+      {confirmRemove && (
+        <ConfirmDialog
+          title={`Remove ${confirmRemove.label}?`}
+          confirmLabel="Remove library"
+          tone="danger-solid"
+          pending={remove.pending}
+          error={remove.error}
+          onClose={() => { setConfirmRemove(null); remove.reset(); }}
+          onConfirm={async () => {
+            const r = await remove.run(confirmRemove);
+            if (r.ok) setConfirmRemove(null);
+          }}
+          body={
+            <>
+              <p>
+                TorHQ forgets where <strong>{confirmRemove.label}</strong> lives.
+                <strong> Nothing on disk is deleted</strong> — the files stay exactly where they are, and
+                Kavita/Navidrome keep serving them.
+              </p>
+              <p className="muted small">
+                New intake can no longer target this library. The removal is refused if intake jobs are
+                still queued against it.
+              </p>
+            </>
+          }
+        />
+      )}
     </>
   );
 }
