@@ -810,3 +810,20 @@ pre {
   .modal-foot { justify-content: stretch; }
   .modal-foot .btn { flex: 1; }
 }
+
+/* 4.14 Google Programmable Search host ------------------------------------- */
+/* Google styles its own widget and ships only a light theme, so the host keeps
+   a light surface unconditionally. Half-applying the app's dark palette to
+   markup we do not control produces black-on-black results, which is worse than
+   an obviously foreign panel. The widget's own layout is left alone; only the
+   container is constrained, and wide result tables scroll rather than pushing
+   the page sideways. */
+.gcse-host {
+  background: #fff;
+  color: #202124;
+  color-scheme: light;
+  border-radius: var(--r-md);
+  padding: var(--s2);
+  overflow-x: auto;
+}
+.gcse-host a { color: #1a0dab; }

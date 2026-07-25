@@ -165,7 +165,7 @@ page shows all three and lets you pick:
 | --- | --- | --- |
 | **Prowlarr** | An aggregated search across every indexer Prowlarr manages. The robust option, and the default. | Yes |
 | **Torrent site** | A directly-scraped torrent-index mirror. Configuration-driven, and fragile by nature — see below. | Yes |
-| **Web** | A general web search widget, for finding out *what* to look for rather than fetching it. | No — it links out |
+| **Web** | A general web search widget, for finding out *what* to look for rather than fetching it. Can embed Google's own Programmable Search widget, which needs an engine id and nothing else. | No — it links out |
 
 A source that can't be used right now is still listed, disabled, with the reason
 next to it. A missing Prowlarr, a Cloudflare-blocked mirror and a mis-typed API
@@ -225,15 +225,33 @@ many sites — when that happens the honest answer is to use Prowlarr instead.
 
 ### The web widget
 
-The web source never scrapes google.com. It supports three providers:
+The web source never scrapes google.com. It supports four providers:
 
 - **`link`** (default, zero-config) — builds ready-made link-outs to the search
   engines you'd have opened in another tab anyway. Works with no credentials.
-- **`google`** — Google Programmable Search, using your own `cx` and API key.
+- **`widget`** — Google's own [Programmable Search
+  Engine](https://programmablesearchengine.google.com/) embed, rendered on the
+  page. **Needs only the engine id (`cx`)** — no API key, no daily quota. This
+  is the least-setup way to get real Google results inside TorHQ.
+- **`google`** — the Programmable Search **JSON API**, using the same `cx` plus
+  an API key. Results are rendered by TorHQ in the app's own styling, but the
+  free tier stops at 100 queries a day.
 - **`searxng`** — your own SearXNG instance.
 
 A provider that fails degrades to `link` and says so, rather than returning
 nothing.
+
+**What the widget costs you.** It is the one part of TorHQ that loads
+third-party code: the browser fetches `cse.js` from Google and queries Google
+directly, so the search terms and the viewer's IP go to Google without passing
+through the server. That is unavoidable for an embed, and it is what removes the
+API key and the quota. If you would rather nothing left your network unproxied,
+use `searxng`; if you would rather TorHQ do the talking, use `google`.
+
+TorHQ mounts the widget in its *results-only* layout, so the page keeps its own
+search box and feeds the term in. The widget renders in Google's own light
+styling — it will not follow TorHQ's dark theme, because restyling markup from
+another origin reliably produces unreadable results rather than a matching one.
 
 ---
 
@@ -319,8 +337,10 @@ tells you.
    - Kavita — API key (optionally set a **library ID** to trigger explicit scans)
    - torrentsearch — no secret; set the base URL to a torrent-index mirror and,
      if needed, override the site-profile selectors / add a FlareSolverr URL
-   - websearch — no secret for the default link-out provider; for Google
-     Programmable Search add a `cx` and an API key, or point `searxngUrl` at your
+   - websearch — no secret for the default link-out provider. For real Google
+     results the cheapest setup is provider `widget` with just a `cx` from
+     programmablesearchengine.google.com; provider `google` additionally needs an
+     API key and is capped at 100 queries a day; or point `searxngUrl` at your
      own SearXNG
 
    Secrets are write-only: TorHQ shows *configured* / *not set* and never returns

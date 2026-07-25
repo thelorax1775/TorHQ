@@ -112,9 +112,9 @@ const EXTRA_FIELDS: Partial<Record<string, ExtraField[]>> = {
     { key: "magnetOnDetailPage", kind: "checkbox", label: "Magnets are on each result's detail page (not the search results page)" },
   ],
   websearch: [
-    { key: "provider", kind: "select", label: "Provider", options: [{ value: "link", label: "Link only (no setup)" }, { value: "google", label: "Google Programmable Search" }, { value: "searxng", label: "SearXNG" }] },
-    { key: "googleCx", kind: "text", label: "Google search-engine id (cx)" },
-    { key: "googleApiKey", kind: "text", secret: true, label: "Google API key", hint: "Leave blank to keep the current key." },
+    { key: "provider", kind: "select", label: "Provider", options: [{ value: "link", label: "Link only (no setup)" }, { value: "widget", label: "Google widget (engine id only)" }, { value: "google", label: "Google JSON API (key + 100/day cap)" }, { value: "searxng", label: "SearXNG" }] },
+    { key: "googleCx", kind: "text", label: "Google search-engine id (cx)", hint: "From programmablesearchengine.google.com. All the Google widget needs — no API key, no daily quota. The widget loads Google's script in your browser, so queries go to Google directly." },
+    { key: "googleApiKey", kind: "text", secret: true, label: "Google API key", hint: "Only for the JSON API provider. Leave blank to keep the current key." },
     { key: "searxngUrl", kind: "text", label: "SearXNG URL" },
     { key: "linkTemplates", kind: "textarea", label: "Extra “search on…” shortcuts", hint: "One per line: Label|https://example.com/search?q={q}" },
   ],

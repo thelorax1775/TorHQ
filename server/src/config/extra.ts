@@ -44,17 +44,25 @@ const ProwlarrExtra = z.object({
 });
 
 /**
- * General web search. Three providers, in increasing order of setup cost:
+ * General web search. Four providers, in increasing order of setup cost:
  *  - `link`     — no backend call at all; TorHQ builds Google/other query URLs
  *                 you open in a tab. Always available, nothing to configure.
+ *  - `widget`   — Google's own Programmable Search Engine widget, embedded in
+ *                 the page. Needs only the search-engine id (`cx`): no API key,
+ *                 no daily quota, and the results are Google's own rendering.
+ *                 The browser talks to Google directly, so the query and the
+ *                 viewer's IP go to Google — which is also true of every other
+ *                 way of putting Google results on a page.
  *  - `google`   — Google Programmable Search JSON API (needs an API key + the
- *                 search-engine id `cx`). Results render inside TorHQ.
+ *                 search-engine id `cx`). Results render inside TorHQ, styled
+ *                 like the rest of the app, but the free tier caps at 100
+ *                 queries a day.
  *  - `searxng`  — a self-hosted SearXNG instance's JSON API. No key, no quota.
  * Google's HTML endpoint is deliberately NOT scraped: it blocks server-side
  * fetches and doing so would violate their terms.
  */
 const WebSearchExtra = z.object({
-  provider: z.enum(["link", "google", "searxng"]).optional(),
+  provider: z.enum(["link", "widget", "google", "searxng"]).optional(),
   // google provider
   googleCx: z.string().max(128).optional(),
   googleApiKey: z.string().min(8).max(256).optional(), // write-only

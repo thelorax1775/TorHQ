@@ -4,11 +4,14 @@ import type { AdapterConfig, HealthResult, ServiceAdapter } from "./types.js";
 /**
  * General web search — the "look it up on the open web" widget that sits next
  * to the torrent-index search. See `WebSearchExtra` in config/extra.ts for the
- * three providers. Google's HTML search page is never scraped: it blocks
- * server-side fetches and scraping it would violate Google's terms. The `link`
- * provider therefore returns query URLs for the browser to open, while the
- * `google` (Programmable Search JSON API) and `searxng` providers return real
- * results TorHQ can render inline.
+ * four providers. Google's HTML search page is never scraped: it blocks
+ * server-side fetches and scraping it would violate Google's terms.
+ *
+ * Three of the providers answer here, on the server. The fourth, `widget`, does
+ * not: it is Google's own embeddable Programmable Search Engine, which runs in
+ * the browser. All this adapter does for it is hand the search-engine id to the
+ * page — there is no request to make and therefore nothing that can fail
+ * server-side, which is exactly why it needs no API key and has no quota.
  *
  * A configured provider that is missing credentials, rate-limited, or simply
  * down never fails the request: the adapter falls back to `link` behaviour and
@@ -28,11 +31,18 @@ export interface WebLink {
 }
 
 export interface WebSearchResponse {
-  provider: "link" | "google" | "searxng";
-  /** Inline results; always empty for the `link` provider. */
+  provider: "link" | "widget" | "google" | "searxng";
+  /** Inline results; always empty for the `link` and `widget` providers. */
   results: WebResult[];
   /** Open-in-a-tab query URLs; always present so the widget is never useless. */
   links: WebLink[];
+  /**
+   * Google Programmable Search engine id, set only for the `widget` provider.
+   * The browser needs it to load Google's embed; it is public by design (it
+   * appears in the script URL of every site using PSE), so unlike the API key
+   * it is safe to send to the page.
+   */
+  cx?: string;
   /** Set when a configured provider failed and TorHQ fell back to links. */
   degraded?: string;
 }
@@ -60,7 +70,7 @@ export class WebSearchAdapter implements ServiceAdapter {
 
   constructor(protected cfg: AdapterConfig) {
     const extra = (cfg.extra ?? {}) as Record<string, unknown>;
-    this.provider = extra.provider === "google" || extra.provider === "searxng" ? extra.provider : "link";
+    this.provider = isProvider(extra.provider) ? extra.provider : "link";
     this.googleCx = str(extra.googleCx) ?? null;
     this.googleApiKey = str(extra.googleApiKey) ?? null;
     // The SearXNG instance lives in `extra`, but fall back to the service's own
@@ -72,6 +82,12 @@ export class WebSearchAdapter implements ServiceAdapter {
   async health(): Promise<HealthResult> {
     if (this.provider === "link") {
       return { healthy: true, detail: "link provider (no backend call)" };
+    }
+    if (this.provider === "widget") {
+      // Nothing to probe: the embed is fetched by the browser, not by TorHQ.
+      return this.googleCx
+        ? { healthy: true, detail: "Google Programmable Search widget configured (renders in the browser)" }
+        : { healthy: false, detail: this.widgetConfigError()! };
     }
     if (this.provider === "google") {
       const missing = this.googleConfigError();
@@ -99,6 +115,15 @@ export class WebSearchAdapter implements ServiceAdapter {
     const links = buildLinks(query, this.linkTemplates);
     if (this.provider === "link") return { provider: "link", results: [], links };
 
+    // The widget renders client-side, so the query is not searched here at all;
+    // the response only carries what the page needs to mount Google's embed.
+    if (this.provider === "widget") {
+      const missing = this.widgetConfigError();
+      return missing
+        ? { provider: "link", results: [], links, degraded: `${missing} — showing links only` }
+        : { provider: "widget", results: [], links, cx: this.googleCx! };
+    }
+
     const configError = this.provider === "google" ? this.googleConfigError() : this.searxngConfigError();
     if (configError) return { provider: "link", results: [], links, degraded: `${configError} — showing links only` };
 
@@ -111,6 +136,10 @@ export class WebSearchAdapter implements ServiceAdapter {
   }
 
   // --- providers -----------------------------------------------------------
+
+  private widgetConfigError(): string | null {
+    return this.googleCx ? null : "The Google search widget needs a search-engine id (cx)";
+  }
 
   private googleConfigError(): string | null {
     if (!this.googleApiKey) return "Google Programmable Search needs an API key";
@@ -201,11 +230,15 @@ function toResult(title: unknown, url: unknown, displayUrl: unknown, snippet: un
 
 /** Human-readable "why you're looking at links" line for the widget. */
 function degradedReason(provider: WebSearchProvider, err: Error): string {
-  const label = provider === "google" ? "Google Programmable Search" : "SearXNG";
+  const label = provider === "searxng" ? "SearXNG" : "Google Programmable Search";
   if (err instanceof HttpError && (err.statusCode === 429 || err.statusCode === 403)) {
     return `${label} quota exceeded or rate-limited — showing links only`;
   }
   return `${label} failed (${err.message}) — showing links only`;
+}
+
+function isProvider(v: unknown): v is WebSearchProvider {
+  return v === "link" || v === "widget" || v === "google" || v === "searxng";
 }
 
 function str(v: unknown): string | undefined {

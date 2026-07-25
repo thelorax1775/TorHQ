@@ -513,7 +513,15 @@ export const openApiDoc = {
             } },
             { type: "object", properties: {
               source: { type: "string", enum: ["web"] },
-              provider: { type: "string", enum: ["link", "google", "searxng"] },
+              provider: {
+            type: "string",
+            enum: ["link", "widget", "google", "searxng"],
+            description:
+              "'widget' means the response carries no results: the page mounts Google's own Programmable " +
+              "Search embed and queries it from the browser. Any provider that is misconfigured or failing " +
+              "degrades to 'link' with a reason in `degraded`, so this is never the provider that was asked for.",
+          },
+          cx: { type: "string", description: "Google engine id; present only when provider is 'widget'." },
               results: { type: "array", items: { $ref: "#/components/schemas/WebSearchResult" } },
               links: { type: "array", items: { type: "object" }, description: "Ready-made link-outs, always present so the widget works with no credentials." },
               degraded: { type: "string", description: "Set when the configured provider failed and only links are being returned." },

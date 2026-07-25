@@ -6,9 +6,10 @@
  *  - `prowlarr` aggregates every indexer you run — the source to reach for.
  *  - `site` is the configuration-driven scraper (see torrentsearch.ts), kept
  *    as a fallback for when Prowlarr itself is down or unconfigured.
- *  - `web` is a link-out widget: it returns links (and, with a configured
- *    provider, inline snippets), never grabbable releases. TorHQ does not
- *    pretend the open web can be sent to qBittorrent.
+ *  - `web` is a link-out widget: it returns links, and — depending on the
+ *    provider — either inline snippets or Google's own embedded Programmable
+ *    Search widget. Never grabbable releases: TorHQ does not pretend the open
+ *    web can be sent to qBittorrent.
  *
  * The whole query state (source, term, indexer/category filters, page) lives
  * in the URL via `useSearchParams`, so a search is a link you can bookmark,
@@ -16,6 +17,7 @@
  */
 import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { GoogleSearchWidget } from "../components/GoogleSearchWidget.js";
 import { apiSend } from "../lib/api.js";
 import { useMutation } from "../lib/useMutation.js";
 import { usePolled, type Polled } from "../lib/usePolled.js";
@@ -66,7 +68,15 @@ interface WebLink { label: string; url: string }
 type SearchResponse =
   | { source: "prowlarr"; results: ProwlarrRelease[] }
   | { source: "site"; results: SiteResult[] }
-  | { source: "web"; provider: "link" | "google" | "searxng"; results: WebResult[]; links: WebLink[]; degraded?: string };
+  | {
+      source: "web";
+      provider: "link" | "widget" | "google" | "searxng";
+      results: WebResult[];
+      links: WebLink[];
+      /** Google engine id, sent only for the `widget` provider. */
+      cx?: string;
+      degraded?: string;
+    };
 
 type GrabTarget = "qbittorrent" | "radarr" | "sonarr" | "lidarr";
 interface GrabRequestBody {
@@ -97,6 +107,7 @@ const TARGETS: Array<{ id: GrabTarget; label: string; hint: string }> = [
 
 const PROVIDER_LABEL: Record<WebSearchResponse["provider"], string> = {
   link: "No search provider configured",
+  widget: "Google Programmable Search — Google's own widget",
   google: "Google Programmable Search",
   searxng: "SearXNG",
 };
@@ -312,7 +323,7 @@ export function Search() {
       ) : (
         <Async q={resultsQ} what="search results">
           {(data) => {
-            if (data.source === "web") return <WebResultsCard data={data} q={resultsQ} />;
+            if (data.source === "web") return <WebResultsCard data={data} q={resultsQ} term={q} />;
 
             const results = data.results;
             return (
@@ -507,7 +518,7 @@ function GrabCell({ pending, status, onGrab }: {
  * configuration. Nothing here is grabbable; TorHQ never treats an open-web hit
  * as a release.
  */
-function WebResultsCard({ data, q }: { data: WebSearchResponse; q: Polled<SearchResponse> }) {
+function WebResultsCard({ data, q, term }: { data: WebSearchResponse; q: Polled<SearchResponse>; term: string }) {
   return (
     <Card title="Web results" subtitle={PROVIDER_LABEL[data.provider]} actions={<RefreshButton q={q} />}>
       <div className="stack">
@@ -516,6 +527,8 @@ function WebResultsCard({ data, q }: { data: WebSearchResponse; q: Polled<Search
           These are links to open in a new tab — TorHQ does not grab from the open web. Switch to Prowlarr or the
           torrent site to send a release to qBittorrent or an *arr.
         </Alert>
+
+        {data.provider === "widget" && data.cx && <GoogleSearchWidget cx={data.cx} query={term} />}
 
         {data.results.length > 0 && (
           <div className="list">
