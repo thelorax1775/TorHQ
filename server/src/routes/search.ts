@@ -142,15 +142,12 @@ export function searchRoutes(app: FastifyInstance, ctx: AppContext): void {
           ? { available: true, detail: `${enabled} indexer${enabled === 1 ? "" : "s"}` }
           : { available: false, detail: "no enabled indexers" };
       }),
-      // The site probe gets its own budget: with a Cloudflare solver configured a
-      // healthy mirror still takes tens of seconds to answer, and the default
-      // probe timeout would report a source that works as unavailable.
       probe("site", "Torrent site", async () => {
         const s = site();
         if (!s) return { available: false, detail: "not configured" };
         const h = await s.health();
         return { available: h.healthy, detail: h.detail ?? (h.healthy ? "reachable" : "unreachable") };
-      }, site()?.probeTimeoutMs),
+      }),
       probe("web", "Web", async () => {
         const w = web();
         const h = await w.health();

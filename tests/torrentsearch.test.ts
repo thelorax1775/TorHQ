@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import {
-  parseSearchResults, parseSize, solverEndpoint, DEFAULT_PROFILE,
+  parseSearchResults, parseSize, solverEndpoint, TorrentSearchAdapter, DEFAULT_PROFILE,
 } from "../server/src/adapters/torrentsearch.js";
 
 // A trimmed-down but structurally faithful KickassTorrents-style results page.
@@ -97,5 +99,51 @@ describe("solverEndpoint", () => {
 
   it("keeps a path prefix, for a solver behind a reverse proxy", () => {
     expect(solverEndpoint("https://solver.example.com/byparr/")).toBe("https://solver.example.com/byparr/v1");
+  });
+});
+
+describe("health is cheap when a solver is configured", () => {
+  // Regression, and an expensive one: health() used to fetch the mirror, which
+  // with a solver means launching a browser for 15-45s. The sources page polls
+  // it every 60s, so an open tab started a browser a minute until the solver's
+  // host fell over. It must talk to the solver, never through it.
+  it("never asks the solver to fetch the mirror", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => { body += c; });
+      req.on("end", () => {
+        seen.push(JSON.parse(body || "{}"));
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ status: "ok", sessions: [] }));
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const { port } = server.address() as AddressInfo;
+
+    const adapter = new TorrentSearchAdapter({
+      baseUrl: "https://example.invalid",
+      secret: "",
+      extra: { flaresolverrUrl: `http://127.0.0.1:${port}` },
+    });
+    const h = await adapter.health();
+    server.close();
+
+    expect(h.healthy).toBe(true);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.cmd).toBe("sessions.list"); // not request.get
+    expect(JSON.stringify(seen[0])).not.toContain("example.invalid");
+  });
+
+  it("reports the source down when the solver is unreachable", async () => {
+    const adapter = new TorrentSearchAdapter({
+      baseUrl: "https://example.invalid",
+      secret: "",
+      // Port 1 is reserved and refuses instantly, so this stays fast.
+      extra: { flaresolverrUrl: "http://127.0.0.1:1" },
+    });
+    const h = await adapter.health();
+    expect(h.healthy).toBe(false);
+    expect(h.detail).toContain("solver unreachable");
   });
 });

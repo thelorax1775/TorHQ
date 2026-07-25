@@ -67,11 +67,10 @@ const DEFAULT_SOLVER_TIMEOUT_MS = 120_000;
 /** Let the solver's own deadline expire first, so we get its error, not a hang-up. */
 const SOLVER_GRACE_MS = 5_000;
 /**
- * A health probe only has to fetch the base URL, but through a solver that still
- * means launching a browser. Long enough not to call a working mirror dead,
- * short enough that the sources page does not sit on a full solve budget.
+ * A liveness check on the solver itself — not on the mirror behind it. Answering
+ * "is this source usable?" must never cost a Cloudflare solve; see health().
  */
-const SOLVER_PROBE_TIMEOUT_MS = 45_000;
+const SOLVER_PING_TIMEOUT_MS = 5_000;
 
 export class TorrentSearchAdapter implements ServiceAdapter {
   readonly kind = "torrentsearch";
@@ -98,16 +97,44 @@ export class TorrentSearchAdapter implements ServiceAdapter {
   }
 
   /**
-   * How long a caller should allow this adapter's health check, or undefined to
-   * use their own default. Going through a solver means a browser start-up, so
-   * the usual few-second probe budget marks a perfectly good mirror unavailable.
+   * Is this source usable?
+   *
+   * When a solver is configured this deliberately does NOT fetch the mirror.
+   * Every fetch through the solver launches a real browser and takes 15-45s, and
+   * this is called by a page that re-polls on a timer — so probing the mirror
+   * meant starting a browser a minute, forever, with solves overlapping. That is
+   * enough to exhaust a small Docker host, and it did.
+   *
+   * The cheap question is the one worth asking: is the solver up? If it is, the
+   * source is usable, and a real search reports anything the mirror itself gets
+   * wrong. Without a solver a direct fetch is cheap, so it stays.
    */
-  get probeTimeoutMs(): number | undefined {
-    return this.flaresolverrUrl ? SOLVER_PROBE_TIMEOUT_MS : undefined;
-  }
-
   async health(): Promise<HealthResult> {
     const start = Date.now();
+    if (this.flaresolverrUrl) {
+      try {
+        const res = await request(solverEndpoint(this.flaresolverrUrl), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ cmd: "sessions.list" }),
+          headersTimeout: SOLVER_PING_TIMEOUT_MS,
+          bodyTimeout: SOLVER_PING_TIMEOUT_MS,
+        });
+        await readCapped(res.body);
+        if (res.statusCode >= 400) throw new Error(`HTTP ${res.statusCode}`);
+        return {
+          healthy: true,
+          detail: "challenge solver reachable — the mirror itself is exercised on a real search",
+          latencyMs: Date.now() - start,
+        };
+      } catch (e) {
+        return {
+          healthy: false,
+          detail: `challenge solver unreachable: ${(e as Error).message}`,
+          latencyMs: Date.now() - start,
+        };
+      }
+    }
     try {
       await this.fetchHtml(this.cfg.baseUrl);
       return { healthy: true, detail: "reachable", latencyMs: Date.now() - start };
