@@ -6,10 +6,11 @@ Sonarr, Lidarr, Prowlarr, qBittorrent, slskd, Jellyfin, Navidrome, and Kavita �
 plus a small, deliberately-scoped **manual intake** pipeline for content those
 tools don't manage (loose books, manga, and Soulseek music).
 
-It also includes a **torrent-search widget**: search a torrent-index site (e.g. a
-KickassTorrents mirror) from inside TorHQ and send a chosen magnet straight to
-qBittorrent — either as a raw grab you own, or tagged with an \*arr's category so
-that \*arr adopts and imports it.
+It also closes the acquisition loop: **search** (via Prowlarr's indexers, a
+scraped torrent-index site, or a general web widget), **grab** the release you
+chose, **watch** it download in qBittorrent, and **verify** that the right \*arr
+adopted and imported it — all from one page set, without tab-hopping between five
+web UIs.
 
 TorHQ is built to sit quietly next to your existing stack. It **observes and
 requests**, and performs only explicit, user-initiated grabs — it does not take
@@ -28,6 +29,7 @@ over your \*arr apps' pipelines.
 - [What TorHQ does](#what-torhq-does)
 - [Architecture](#architecture)
 - [The intake boundary](#the-intake-boundary-torhq-vs-the-arr)
+- [Search, grab, and the import loop](#search-grab-and-the-import-loop)
 - [Local development](#local-development)
 - [Environment variables](#environment-variables)
 - [First-run setup](#first-run-setup)
@@ -45,7 +47,10 @@ over your \*arr apps' pipelines.
 | --- | --- |
 | **Dashboard** | Aggregated service health, qBittorrent downloads grouped by category, \*arr activity (history + wanted/missing), slskd downloads, storage usage, and failed-import surfacing. |
 | **Requests** | Search Radarr/Sonarr/Lidarr, **choose the intended result**, and submit an add+search request. TorHQ asks; the \*arr does the work. |
-| **Torrent search** | Search a configurable torrent-index site and **send a chosen magnet straight to qBittorrent** — into a neutral `torhq-manual` category, or tagged `radarr`/`sonarr`/`lidarr` so that \*arr adopts and imports it. |
+| **Search** | Three sources behind one page: **Prowlarr** (aggregated across every indexer), a scraped **torrent-index site**, and a general **web widget**. Grab a chosen release into a neutral `torhq-manual` category, or hand it to `radarr`/`sonarr`/`lidarr` so that \*arr adopts and imports it. |
+| **Downloads** | Full qBittorrent control — pause/resume/recheck, priority, category moves, and both flavours of removal, with the destructive one gated behind a typed confirmation. |
+| **Queue** | The Radarr/Sonarr/Lidarr queues merged into one view, with the \*arr's own error messages surfaced, plus per-item removal and blocklisting. One dead service degrades to a notice; it never blanks the view. |
+| **Pipeline health** | Read-only checks of the grab → download → import path: does the \*arr have a download client, do its categories match, can it actually see the directory qBittorrent writes to. Each failing check names the fix — TorHQ never applies one silently. |
 | **Manual intake** | Preview and then atomically import a completed file/folder into a **Kavita** (books/manga/comics) or **Navidrome** (music) library, then trigger a rescan. Durable, idempotent, retried. |
 | **slskd webhook** | Completed Soulseek downloads are pushed to `/webhooks/slskd` (shared-token auth) and enqueued as intake jobs into a music library. |
 | **Services** | Encrypted-at-rest credential storage with a connection tester. Secrets are never returned to the browser. |
@@ -133,34 +138,55 @@ previewed, approved import.
 
 ---
 
-## Torrent search & grab
+## Search, grab, and the import loop
 
-The **Search** page searches a torrent-index site and lets you push a chosen
-magnet straight to qBittorrent. It is intentionally simple and explicit:
+The **Search** page has three sources. They answer different questions, so the
+page shows all three and lets you pick:
 
-1. Configure a **`torrentsearch`** service (Services page) — a base URL pointing at
-   a torrent-index mirror (e.g. a KickassTorrents proxy). Then configure
-   **qBittorrent**, which is where grabs are sent.
-2. Search a term. TorHQ scrapes the results and shows title, size, and
-   seeders/leechers, strongest-seeded first.
-3. Click a **Send to** button per result:
-   - **qBittorrent** — grabs into a neutral `torhq-manual` category (a raw
-     download you own and organize yourself).
-   - **Radarr / Sonarr / Lidarr** — grabs into that \*arr's category so, if you
-     have qBittorrent wired as that \*arr's download client with that category,
-     the \*arr adopts and imports the download. (TorHQ still only writes to
-     qBittorrent — it never touches \*arr files.)
+| Source | What it is | Grabbable |
+| --- | --- | --- |
+| **Prowlarr** | An aggregated search across every indexer Prowlarr manages. The robust option, and the default. | Yes |
+| **Torrent site** | A directly-scraped torrent-index mirror. Configuration-driven, and fragile by nature — see below. | Yes |
+| **Web** | A general web search widget, for finding out *what* to look for rather than fetching it. | No — it links out |
 
-Only well-formed `magnet:?xt=urn:btih:<hash>` links are accepted, and the grab
-category is restricted to a fixed allowlist.
+A source that can't be used right now is still listed, disabled, with the reason
+next to it. A missing Prowlarr, a Cloudflare-blocked mirror and a mis-typed API
+key produce three different messages, not one generic failure.
 
-**Closing the loop with the \*arr.** When you grab into a `radarr`/`sonarr`/`lidarr`
-category, TorHQ immediately asks that \*arr to process its download client
-(`RefreshMonitoredDownloads`) so it identifies and imports the download without
-waiting — the \*arr still owns the import. For this to result in an import, the
-item must be **added and monitored** in the \*arr (e.g. via the **Requests** page)
-with qBittorrent configured as its download client and Completed Download
-Handling enabled. Raw `torhq-manual` grabs are left for you to organize.
+### Grabbing
+
+Choose a **target** when you grab, and the target decides what happens:
+
+- **Radarr / Sonarr / Lidarr** — Prowlarr hands the release to its download
+  client, and TorHQ immediately asks that \*arr to poll its download client
+  (`RefreshMonitoredDownloads`) so it adopts and imports the download without
+  waiting. The \*arr still owns the import, rename and placement.
+- **qBittorrent (`torhq-manual`)** — a raw download that TorHQ owns and no \*arr
+  will touch. You organize it yourself.
+
+Only well-formed `magnet:?xt=urn:btih:<hash>` links are accepted for site grabs;
+Prowlarr grabs travel by `guid` + `indexerId`, and the proxy download URL is
+re-signed and origin-checked server-side before it ever reaches qBittorrent. The
+grab category is restricted to a fixed allowlist.
+
+### Why an import fails, and how to find out
+
+Grabbing into an \*arr's category only results in an import if the whole path
+lines up: the item must be added and monitored in that \*arr, qBittorrent must be
+its download client with the matching category, Completed Download Handling must
+be on, and — the one that catches everyone — **the \*arr container must actually
+be able to see the directory qBittorrent writes to.** A download client on a
+different host, or an LXC without the right bind mount, produces a silent
+never-imports loop with no error anywhere.
+
+The **Queue** page runs those checks explicitly (`GET /api/pipeline/check`) and
+names the fix for each failing one. It also lists downloads that finished but
+could not be imported, and can ask the owning \*arr to scan one again. TorHQ
+never repairs a mismatch itself and never moves a file to work around one.
+
+> **Tip:** if downloads and libraries sit on the same filesystem, bind-mount the
+> download directory into each \*arr at the *same path qBittorrent uses*. Imports
+> then hardlink — instant, and no second copy of the data.
 
 ### Configuring a mirror (and why it's fragile)
 
@@ -176,10 +202,20 @@ If a mirror is behind a Cloudflare browser challenge, a plain server-side fetch
 gets blocked; TorHQ surfaces a clear error rather than failing silently. Set an
 optional **FlareSolverr URL** in the same config to route fetches through
 [FlareSolverr](https://github.com/FlareSolverr/FlareSolverr) and clear the
-challenge.
+challenge. Be aware that current Cloudflare challenges defeat FlareSolverr on
+many sites — when that happens the honest answer is to use Prowlarr instead.
 
-> For a more robust, long-lived setup, prefer Prowlarr + the \*arr apps for search
-> and grabbing. This widget is a convenience for ad-hoc, manual grabs.
+### The web widget
+
+The web source never scrapes google.com. It supports three providers:
+
+- **`link`** (default, zero-config) — builds ready-made link-outs to the search
+  engines you'd have opened in another tab anyway. Works with no credentials.
+- **`google`** — Google Programmable Search, using your own `cx` and API key.
+- **`searxng`** — your own SearXNG instance.
+
+A provider that fails degrades to `link` and says so, rather than returning
+nothing.
 
 ---
 
@@ -517,11 +553,16 @@ server/            Fastify API + worker (TypeScript, ESM)
   src/queue/       durable intake queue + import state machine
   src/routes/      REST + webhook route handlers
   src/security/    path containment / traversal defenses
+  src/lib/         pipeline health checks, activity log, shared helpers
 web/               React + Vite SPA
-tests/             Vitest suites (crypto, paths, routing, intake, migrations)
+  src/components/  design system (ui.tsx), app shell, icon set
+  src/lib/         the single data layer: usePolled / useMutation / format / prefs
+  src/pages/       one file per route
+tests/             Vitest suites (crypto, paths, routing, intake, migrations,
+                   search, downloads, queue, pipeline)
 scripts/           install / upgrade / backup
 deploy/            systemd unit + nginx reverse-proxy config
-docs/              API curl examples
+docs/              API curl examples + the revamp contract
 ```
 
 ---
