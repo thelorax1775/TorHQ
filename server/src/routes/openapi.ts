@@ -213,17 +213,96 @@ export const openApiDoc = {
           detailUrl: { type: ["string", "null"], description: "Same-origin detail page link, if any." },
         },
       },
+      ProwlarrRelease: {
+        type: "object",
+        description: "A normalized release from Prowlarr's aggregated search, seeders-desc.",
+        properties: {
+          guid: { type: "string", description: "Identifies the release to Prowlarr; required to grab it." },
+          indexerId: { type: "integer" },
+          indexer: { type: "string" },
+          title: { type: "string" },
+          size: { type: ["integer", "null"] },
+          seeders: { type: ["integer", "null"], description: "null means the indexer did not report a count — not zero." },
+          leechers: { type: ["integer", "null"] },
+          protocol: { type: "string", enum: ["torrent", "usenet"] },
+          publishDate: { type: ["string", "null"], format: "date-time" },
+          infoUrl: { type: "string", description: "The indexer's own detail page." },
+          downloadUrl: { type: "string", description: "Prowlarr proxy link with the API key stripped; re-signed server-side before use." },
+          magnetUrl: { type: "string" },
+          categories: { type: "array", items: { type: "object" } },
+        },
+      },
+      WebSearchResult: {
+        type: "object",
+        description: "A general web result. Not grabbable — the web source links out, it never yields releases.",
+        properties: {
+          title: { type: "string" },
+          url: { type: "string" },
+          snippet: { type: "string" },
+        },
+      },
       GrabInput: {
         type: "object",
-        required: ["magnet"],
+        description:
+          "A grab from either source. `site` grabs carry a magnet; `prowlarr` grabs carry guid + indexerId " +
+          "and let Prowlarr hand the release to its own download client.",
         properties: {
-          magnet: { type: "string", description: "A well-formed magnet:?xt=urn:btih:<hash> link. Non-magnet URLs are rejected." },
+          source: { type: "string", enum: ["prowlarr", "site"], default: "site" },
+          magnet: { type: "string", description: "Required for site grabs. A well-formed magnet:?xt=urn:btih:<hash> link; non-magnet URLs are rejected." },
+          guid: { type: "string", maxLength: 2048, description: "Required for prowlarr grabs." },
+          indexerId: { type: "integer", minimum: 0, description: "Required for prowlarr grabs." },
+          downloadUrl: { type: "string", format: "uri", description: "The key-stripped proxy link from the search result; re-signed and origin-checked server-side." },
           title: { type: "string", maxLength: 512 },
+          target: {
+            type: "string",
+            enum: ["radarr", "sonarr", "lidarr", "manual"],
+            description: "Which *arr should adopt and import the download. `manual` means TorHQ owns it and no *arr will import it.",
+          },
           category: {
             type: "string",
             enum: ["torhq-manual", "radarr", "sonarr", "lidarr"],
-            description: "qBittorrent category. Defaults to torhq-manual; an *arr category lets that *arr adopt the download.",
+            description: "Legacy alias for `target`, expressed as the qBittorrent category.",
           },
+        },
+      },
+      DownloadAction: {
+        type: "object",
+        required: ["hashes", "action"],
+        properties: {
+          hashes: { type: "array", items: { type: "string" }, minItems: 1, description: "Torrent info hashes." },
+          action: {
+            type: "string",
+            enum: ["pause", "resume", "recheck", "delete", "deleteWithFiles", "topPriority", "bottomPriority", "setCategory"],
+          },
+          category: { type: "string", description: "Required for setCategory." },
+        },
+      },
+      QueueRemoveInput: {
+        type: "object",
+        properties: {
+          removeFromClient: { type: "boolean", description: "Also remove the torrent from qBittorrent. Files are kept on disk." },
+          blocklist: { type: "boolean", description: "Blocklist the release so the *arr does not grab it again." },
+        },
+      },
+      ManualImportInput: {
+        type: "object",
+        required: ["service", "downloadId"],
+        properties: {
+          service: { type: "string", enum: ["radarr", "sonarr", "lidarr"] },
+          downloadId: { type: "string", description: "The download client's id for the grab — a torrent hash for qBittorrent." },
+        },
+      },
+      PipelineCheck: {
+        type: "object",
+        description: "One verifiable claim about the grab → download → import path.",
+        required: ["id", "label", "ok", "severity", "detail"],
+        properties: {
+          id: { type: "string" },
+          label: { type: "string" },
+          ok: { type: "boolean" },
+          severity: { type: "string", enum: ["error", "warn", "info"] },
+          detail: { type: "string" },
+          fix: { type: "string", description: "What to change. Present whenever ok is false. TorHQ never applies it silently." },
         },
       },
       SlskdWebhook: {
@@ -353,36 +432,92 @@ export const openApiDoc = {
         },
       },
     },
-    "/api/search": {
+    "/api/search/sources": {
       get: {
-        summary: "Search the configured torrent site for magnets (read-only)",
-        parameters: [
-          { name: "q", in: "query", required: true, schema: { type: "string", minLength: 1, maxLength: 256 } },
-          { name: "page", in: "query", schema: { type: "integer", minimum: 1, maximum: 20 } },
-        ],
+        summary: "Which search sources can be used right now, and why not when they can't",
+        description:
+          "An unavailable source is still listed, with `detail` as the reason, so the UI can " +
+          "disable it and say why rather than silently hiding a capability.",
         responses: {
           "200": { description: "OK", content: { "application/json": { schema: { type: "object", properties: {
-            results: { type: "array", items: { $ref: "#/components/schemas/TorrentResult" } },
+            sources: { type: "array", items: { type: "object", properties: {
+              id: { type: "string", enum: ["prowlarr", "site", "web"] },
+              label: { type: "string" },
+              available: { type: "boolean" },
+              detail: { type: "string" },
+            } } },
           } } } } },
-          "409": errorResponse("torrent search not configured"),
-          "502": errorResponse("site unreachable / blocked (e.g. Cloudflare)"),
+        },
+      },
+    },
+    "/api/search/indexers": {
+      get: {
+        summary: "Prowlarr's indexers and their categories, for the search filters",
+        responses: {
+          "200": { description: "OK" },
+          "409": errorResponse("prowlarr not configured"),
+          "502": errorResponse("prowlarr unreachable"),
+        },
+      },
+    },
+    "/api/search": {
+      get: {
+        summary: "Search one source (read-only)",
+        description:
+          "`prowlarr` aggregates every selected indexer; `site` scrapes the configured torrent " +
+          "site; `web` is a general web widget that returns links, not grabbable releases. " +
+          "The response shape depends on the source.",
+        parameters: [
+          { name: "source", in: "query", schema: { type: "string", enum: ["prowlarr", "site", "web"], default: "prowlarr" } },
+          { name: "q", in: "query", required: true, schema: { type: "string", minLength: 1, maxLength: 256 } },
+          { name: "page", in: "query", description: "site only.", schema: { type: "integer", minimum: 1, maximum: 20 } },
+          { name: "indexerIds", in: "query", description: "prowlarr only; comma-separated. Omit to search every indexer.", schema: { type: "string" } },
+          { name: "categories", in: "query", description: "prowlarr only; comma-separated newznab category ids.", schema: { type: "string" } },
+          { name: "limit", in: "query", description: "prowlarr only.", schema: { type: "integer", minimum: 10, maximum: 500 } },
+        ],
+        responses: {
+          "200": { description: "OK", content: { "application/json": { schema: { oneOf: [
+            { type: "object", properties: {
+              source: { type: "string", enum: ["prowlarr"] },
+              results: { type: "array", items: { $ref: "#/components/schemas/ProwlarrRelease" } },
+            } },
+            { type: "object", properties: {
+              source: { type: "string", enum: ["site"] },
+              results: { type: "array", items: { $ref: "#/components/schemas/TorrentResult" } },
+            } },
+            { type: "object", properties: {
+              source: { type: "string", enum: ["web"] },
+              provider: { type: "string", enum: ["link", "google", "searxng"] },
+              results: { type: "array", items: { $ref: "#/components/schemas/WebSearchResult" } },
+              links: { type: "array", items: { type: "object" }, description: "Ready-made link-outs, always present so the widget works with no credentials." },
+              degraded: { type: "string", description: "Set when the configured provider failed and only links are being returned." },
+            } },
+          ] } } } },
+          "400": errorResponse("invalid query"),
+          "409": errorResponse("the requested source is not configured"),
+          "502": errorResponse("source unreachable / blocked (e.g. Cloudflare)"),
         },
       },
     },
     "/api/search/grab": {
       post: {
-        summary: "Send a chosen magnet straight to qBittorrent",
+        summary: "Grab a chosen release and route it to the *arr that should import it",
+        description:
+          "prowlarr + an *arr target → Prowlarr hands the release to its download client and that *arr " +
+          "is nudged to adopt it; prowlarr + qBittorrent → the release's own link is added under " +
+          "`torhq-manual`; site → the magnet goes to qBittorrent under the target's category. The *arr " +
+          "always owns the import, rename and placement — TorHQ moves no files.",
         security: [{ cookieAuth: [], csrfToken: [] }],
         parameters: [csrfHeader],
         requestBody: jsonBody("GrabInput"),
         responses: {
           "200": { description: "Grabbed", content: { "application/json": { schema: { type: "object", properties: {
-            ok: { type: "boolean" }, category: { type: "string" },
+            ok: { type: "boolean" }, category: { type: "string" }, via: { type: "string" },
             importTriggered: { type: "boolean", description: "Whether the matching *arr was nudged to import the download." },
           } } } } },
-          "400": errorResponse("invalid magnet / category"),
-          "409": errorResponse("qBittorrent not configured"),
-          "502": errorResponse("qBittorrent rejected/unreachable"),
+          "400": errorResponse("invalid magnet / missing guid+indexerId / unknown target"),
+          "409": errorResponse("the source or qBittorrent is not configured"),
+          "502": errorResponse("prowlarr or qBittorrent rejected/unreachable"),
         },
       },
     },
@@ -434,6 +569,104 @@ export const openApiDoc = {
       },
     },
     "/api/activity": { get: { summary: "Global activity timeline", responses: { "200": { description: "OK" } } } },
+    "/api/downloads": {
+      get: {
+        summary: "Every torrent in qBittorrent, with the global transfer rates and category map",
+        responses: { "200": { description: "OK" }, "409": errorResponse("qbittorrent not configured"), "502": errorResponse("qBittorrent unreachable") },
+      },
+    },
+    "/api/downloads/action": {
+      post: {
+        summary: "Act on one or more torrents",
+        description:
+          "`deleteWithFiles` is the only action that destroys data on disk; every action is recorded " +
+          "in the activity log with the affected torrent names.",
+        security: [{ cookieAuth: [], csrfToken: [] }],
+        parameters: [csrfHeader],
+        requestBody: jsonBody("DownloadAction"),
+        responses: {
+          "200": { description: "Applied", content: { "application/json": { schema: { type: "object", properties: {
+            ok: { type: "boolean" }, action: { type: "string" }, count: { type: "integer" },
+          } } } } },
+          "400": errorResponse("invalid action / hashes"),
+          "409": errorResponse("qbittorrent not configured"),
+          "502": errorResponse("qBittorrent rejected the action"),
+        },
+      },
+    },
+    "/api/queue": {
+      get: {
+        summary: "The merged Radarr/Sonarr/Lidarr queue",
+        description:
+          "A service that is missing or down is reported in `unavailable` and never fails the whole " +
+          "response — a broken Lidarr must not hide what Radarr is doing.",
+        responses: { "200": { description: "OK" } },
+      },
+    },
+    "/api/queue/refresh": {
+      post: {
+        summary: "Ask every configured *arr to poll its download client now",
+        security: [{ cookieAuth: [], csrfToken: [] }],
+        parameters: [csrfHeader],
+        responses: { "200": { description: "OK" } },
+      },
+    },
+    "/api/queue/{service}/{id}/remove": {
+      post: {
+        summary: "Drop one record from an *arr's queue",
+        description: "Downloaded files are left on disk either way; both switches are the caller's explicit choice and both are logged.",
+        security: [{ cookieAuth: [], csrfToken: [] }],
+        parameters: [
+          csrfHeader,
+          { name: "service", in: "path", required: true, schema: { type: "string", enum: ["radarr", "sonarr", "lidarr"] } },
+          { name: "id", in: "path", required: true, schema: { type: "integer" } },
+        ],
+        requestBody: jsonBody("QueueRemoveInput"),
+        responses: {
+          "200": jsonOk("Ok", "Removed"),
+          "409": errorResponse("that *arr is not configured"),
+          "502": errorResponse("the *arr rejected the removal"),
+        },
+      },
+    },
+    "/api/pipeline/check": {
+      get: {
+        summary: "Read-only verification of the grab → download → import path",
+        description:
+          "Reports concrete mismatches with a fix. TorHQ never repairs one silently — a check that " +
+          "fails tells you what to change, it does not change it.",
+        responses: {
+          "200": { description: "OK", content: { "application/json": { schema: { type: "object", properties: {
+            checks: { type: "array", items: { $ref: "#/components/schemas/PipelineCheck" } },
+          } } } } },
+        },
+      },
+    },
+    "/api/pipeline/failed-imports": {
+      get: {
+        summary: "Downloads an *arr finished but could not import",
+        responses: { "200": { description: "OK" } },
+      },
+    },
+    "/api/pipeline/manual-import": {
+      post: {
+        summary: "Ask the owning *arr to scan a completed download again",
+        description:
+          "The *arr does the scanning, moving and renaming; TorHQ only points it at that *arr's own " +
+          "output path for a download it already owns.",
+        security: [{ cookieAuth: [], csrfToken: [] }],
+        parameters: [csrfHeader],
+        requestBody: jsonBody("ManualImportInput"),
+        responses: {
+          "200": { description: "Requested", content: { "application/json": { schema: { type: "object", properties: {
+            ok: { type: "boolean" }, service: { type: "string" }, command: { type: "string" }, path: { type: ["string", "null"] },
+          } } } } },
+          "404": errorResponse("that *arr has no queue item for the given downloadId"),
+          "409": errorResponse("that *arr is not configured"),
+          "502": errorResponse("the *arr rejected the rescan"),
+        },
+      },
+    },
     "/api/status/health": { get: { summary: "Aggregate service health", responses: { "200": { description: "OK" } } } },
     "/api/status/downloads": { get: { summary: "qBittorrent downloads by category", responses: { "200": { description: "OK" }, "409": errorResponse("qbittorrent not configured") } } },
     "/api/status/arr-activity": { get: { summary: "Recent Radarr/Sonarr/Lidarr activity", responses: { "200": { description: "OK" } } } },
