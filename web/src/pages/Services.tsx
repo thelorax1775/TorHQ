@@ -1,154 +1,409 @@
-import { useEffect, useState } from "react";
-import { api } from "../lib/api.js";
+/**
+ * Services — every external connection the *arr stack depends on: qBittorrent,
+ * Radarr/Sonarr/Lidarr, Prowlarr (primary search), slskd, the intake targets
+ * (Kavita/Navidrome), Jellyfin, and the two search fallbacks (torrentsearch,
+ * websearch). This is the most security-sensitive page in the app.
+ *
+ * Secrets are write-only end to end (see server/src/config/store.ts and
+ * config/extra.ts): the server never returns a stored secret, only a
+ * `secretMask`/`<key>Set` presence flag. So every control here shows
+ * "configured" / "not set", never a value that looks like the real thing —
+ * no dot-masked placeholder implying a secret is present when it isn't, and
+ * leaving a field blank always means "keep what's already stored", never
+ * "clear it" (that distinction lives in `mergeExtra` server-side; the extra
+ * fields below are pre-filled from the stored config so a blank field the
+ * user never touched still round-trips unchanged).
+ *
+ * "Test connection" never persists anything — it calls the adapter directly
+ * with the form's current values (falling back to the stored secret if the
+ * field is blank) and is always a separate action from "Save".
+ */
+import { useEffect, useMemo, useRef, useState } from "react";
+import { apiSend, getCsrf } from "../lib/api.js";
+import { useMutation } from "../lib/useMutation.js";
+import { usePolled } from "../lib/usePolled.js";
+import {
+  Alert, Async, Badge, Button, Card, Checkbox, Field, PageHeader,
+  RefreshButton, SelectField, StaleNotice, StatusDot, TableWrap, TextField, type Tone,
+} from "../components/ui.js";
 
-const DEFAULTS: Record<string, string> = {
-  qbittorrent: "http://127.0.0.1:8080", radarr: "http://127.0.0.1:7878",
-  sonarr: "http://127.0.0.1:8989", lidarr: "http://127.0.0.1:8686",
-  prowlarr: "http://127.0.0.1:9696", slskd: "http://127.0.0.1:5030",
-  jellyfin: "http://127.0.0.1:8096", navidrome: "http://127.0.0.1:4533",
-  kavita: "http://127.0.0.1:5000", torrentsearch: "https://",
+interface SafeService {
+  kind: string;
+  label: string;
+  baseUrl: string;
+  enabled: boolean;
+  lastHealthy: number | null;
+  lastStatus: string | null;
+  secretMask: string | null;
+  extra: Record<string, unknown>;
+}
+interface ServicesResponse { services: SafeService[]; kinds: string[] }
+
+interface HealthResult { healthy: boolean; version?: string; detail?: string; latencyMs?: number }
+interface HealthResponse { health: Record<string, HealthResult>; services: SafeService[] }
+
+interface ServiceInput {
+  kind: string;
+  label: string;
+  baseUrl: string;
+  secret?: string;
+  extra?: Record<string, unknown>;
+}
+
+/** Static facts about each kind that the backend doesn't need to tell us. */
+const KIND_META: Record<string, { label: string; role: string; secretHint: string; defaultUrl: string }> = {
+  qbittorrent: { label: "qBittorrent", role: "Download client — every grab lands here first.", secretHint: "username:password", defaultUrl: "http://127.0.0.1:8080" },
+  radarr: { label: "Radarr", role: "Movies.", secretHint: "API key", defaultUrl: "http://127.0.0.1:7878" },
+  sonarr: { label: "Sonarr", role: "TV.", secretHint: "API key", defaultUrl: "http://127.0.0.1:8989" },
+  lidarr: { label: "Lidarr", role: "Music.", secretHint: "API key", defaultUrl: "http://127.0.0.1:8686" },
+  prowlarr: { label: "Prowlarr", role: "Primary search backend — aggregates every indexer you run.", secretHint: "API key", defaultUrl: "http://127.0.0.1:9696" },
+  slskd: { label: "slskd", role: "Soulseek client.", secretHint: "API key", defaultUrl: "http://127.0.0.1:5030" },
+  jellyfin: { label: "Jellyfin", role: "Media server — read-only visibility here.", secretHint: "API token", defaultUrl: "http://127.0.0.1:8096" },
+  navidrome: { label: "Navidrome", role: "Music library — an intake target.", secretHint: "username:password", defaultUrl: "http://127.0.0.1:4533" },
+  kavita: { label: "Kavita", role: "Books/manga/comics library — an intake target.", secretHint: "API key", defaultUrl: "http://127.0.0.1:5000" },
+  torrentsearch: { label: "Torrent-index search", role: "Fallback scraper for one mirror — only needed where Prowlarr has no indexer.", secretHint: "not required", defaultUrl: "https://" },
+  websearch: { label: "Web search", role: "General web-search widget alongside torrent search.", secretHint: "not required", defaultUrl: "http://127.0.0.1:8080" },
 };
-const SECRET_HINT: Record<string, string> = {
-  qbittorrent: "username:password", navidrome: "username:password", slskd: "API key",
-  radarr: "API key", sonarr: "API key", lidarr: "API key", prowlarr: "API key",
-  jellyfin: "API token", kavita: "API key", torrentsearch: "not required",
+const meta = (kind: string) => KIND_META[kind] ?? { label: kind, role: "", secretHint: "", defaultUrl: "" };
+
+/** How loudly a kind's row should read, driven entirely by the health check's
+ *  own verdict — `detail` already carries the specific reason (timeout, 401,
+ *  wrong port, …), so nothing here needs to guess at a message. */
+function healthTone(h: HealthResult | undefined): Tone {
+  if (!h) return "neutral";
+  if (h.healthy) return "ok";
+  return h.detail === "not configured" ? "neutral" : "err";
+}
+function healthLabel(h: HealthResult | undefined): string {
+  if (!h) return "Unknown";
+  if (h.healthy) return h.version ? `Healthy · v${h.version}` : "Healthy";
+  return h.detail ?? "Unhealthy";
+}
+
+type ExtraField =
+  | { key: string; kind: "text" | "number"; label: string; hint?: string; placeholder?: string; secret?: boolean }
+  | { key: string; kind: "checkbox"; label: string }
+  | { key: string; kind: "select"; label: string; options: Array<{ value: string; label: string }> }
+  | { key: string; kind: "textarea"; label: string; hint?: string; placeholder?: string };
+
+// Per-kind "extra" config, matching EXTRA_SCHEMAS in server/src/config/extra.ts
+// exactly — a kind with no entry here sends no extra at all.
+const EXTRA_FIELDS: Partial<Record<string, ExtraField[]>> = {
+  kavita: [
+    { key: "libraryId", kind: "number", label: "Kavita library ID (optional)", placeholder: "3", hint: "When set, intake triggers an explicit scan of this library after import." },
+  ],
+  slskd: [
+    { key: "webhookToken", kind: "text", secret: true, label: "Webhook token", hint: "Authenticates the completed-download webhook. Leave blank to keep the current token." },
+  ],
+  prowlarr: [
+    { key: "defaultIndexerIds", kind: "text", label: "Default indexer IDs", placeholder: "1,4,7", hint: "Comma-separated Prowlarr indexer ids to search by default; blank searches every enabled indexer." },
+    { key: "searchLimit", kind: "number", label: "Search result limit", placeholder: "50", hint: "10–500 results kept per search." },
+  ],
+  torrentsearch: [
+    { key: "searchPath", kind: "text", label: "Search path template", placeholder: "/usearch/{query}/{page}/" },
+    { key: "rowSelector", kind: "text", label: "Result row selector", placeholder: "table.data tr.odd, table.data tr.even" },
+    { key: "titleSelector", kind: "text", label: "Title selector", placeholder: "a.cellMainLink" },
+    { key: "magnetSelector", kind: "text", label: "Magnet link selector", placeholder: "a[href^='magnet:']" },
+    { key: "seedersSelector", kind: "text", label: "Seeders selector", placeholder: "td.green.center" },
+    { key: "leechersSelector", kind: "text", label: "Leechers selector", placeholder: "td.red.center" },
+    { key: "sizeSelector", kind: "text", label: "Size selector", placeholder: "td.nobr.center" },
+    { key: "detailLinkSelector", kind: "text", label: "Detail-link selector", placeholder: "a.cellMainLink" },
+    { key: "flaresolverrUrl", kind: "text", label: "FlareSolverr URL (optional, clears Cloudflare)", placeholder: "http://127.0.0.1:8191" },
+    { key: "magnetOnDetailPage", kind: "checkbox", label: "Magnets are on each result's detail page (not the search results page)" },
+  ],
+  websearch: [
+    { key: "provider", kind: "select", label: "Provider", options: [{ value: "link", label: "Link only (no setup)" }, { value: "google", label: "Google Programmable Search" }, { value: "searxng", label: "SearXNG" }] },
+    { key: "googleCx", kind: "text", label: "Google search-engine id (cx)" },
+    { key: "googleApiKey", kind: "text", secret: true, label: "Google API key", hint: "Leave blank to keep the current key." },
+    { key: "searxngUrl", kind: "text", label: "SearXNG URL" },
+    { key: "linkTemplates", kind: "textarea", label: "Extra “search on…” shortcuts", hint: "One per line: Label|https://example.com/search?q={q}" },
+  ],
 };
 
-// Torrent-search "extra" knobs. Placeholders show the KAT-style defaults used
-// when a field is left blank — override per mirror.
-const TS_FIELDS: Array<{ key: string; label: string; placeholder: string }> = [
-  { key: "searchPath", label: "Search path template", placeholder: "/usearch/{query}/{page}/" },
-  { key: "rowSelector", label: "Result row selector", placeholder: "table.data tr.odd, table.data tr.even" },
-  { key: "titleSelector", label: "Title selector", placeholder: "a.cellMainLink" },
-  { key: "magnetSelector", label: "Magnet link selector", placeholder: "a[href^='magnet:']" },
-  { key: "seedersSelector", label: "Seeders selector", placeholder: "td.green.center" },
-  { key: "leechersSelector", label: "Leechers selector", placeholder: "td.red.center" },
-  { key: "sizeSelector", label: "Size selector", placeholder: "td.nobr.center" },
-  { key: "detailLinkSelector", label: "Detail-link selector", placeholder: "a.cellMainLink" },
-  { key: "flaresolverrUrl", label: "FlareSolverr URL (optional, clears Cloudflare)", placeholder: "http://127.0.0.1:8191" },
-];
+const strVal = (v: unknown): string => (v == null ? "" : String(v));
+
+/**
+ * POST /api/services/test returns the health result even on failure (status
+ * 502) — the failed connection attempt *is* the result, not an application
+ * error. The shared `api()` wrapper only recovers a message from an `{error}`
+ * body on a non-2xx response, so going through it here would collapse a
+ * specific failure (wrong port, 401, timeout) into a bare "HTTP 502". This
+ * bypasses that one wrapper while still attaching the CSRF header by hand.
+ */
+async function testService(body: ServiceInput): Promise<HealthResult> {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  const csrf = getCsrf();
+  if (csrf) headers["x-csrf-token"] = csrf;
+  let res: Response;
+  try {
+    res = await fetch("/api/services/test", { method: "POST", credentials: "same-origin", headers, body: JSON.stringify(body) });
+  } catch (e) {
+    throw new Error(e instanceof Error ? e.message : "network request failed");
+  }
+  const text = await res.text();
+  const data: unknown = text ? JSON.parse(text) : null;
+  if (data && typeof data === "object" && "healthy" in data) return data as HealthResult;
+  const message = data && typeof data === "object" && "error" in data ? String((data as { error: unknown }).error) : `HTTP ${res.status}`;
+  throw new Error(message);
+}
 
 export function Services() {
-  const [data, setData] = useState<any>(null);
-  const [sel, setSel] = useState<string>("qbittorrent");
+  const servicesQ = usePolled<ServicesResponse>("/api/services");
+  const healthQ = usePolled<HealthResponse>("/api/status/health", 20000);
+
+  const [sel, setSel] = useState("qbittorrent");
   const [baseUrl, setBaseUrl] = useState("");
   const [secret, setSecret] = useState("");
-  // Typed extra config (only the fields a given service actually needs).
-  const [libraryId, setLibraryId] = useState("");
-  const [webhookToken, setWebhookToken] = useState("");
-  const [webhookTokenSet, setWebhookTokenSet] = useState(false);
-  const [ts, setTs] = useState<Record<string, string>>({});
-  const [tsMagnetDetail, setTsMagnetDetail] = useState(false);
-  const [test, setTest] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [extra, setExtra] = useState<Record<string, string | boolean>>({});
+  const formRef = useRef<HTMLDivElement>(null);
 
-  const load = () => api("/api/services").then(setData);
-  useEffect(() => { load(); }, []);
+  const test = useMutation(testService);
+  const save = useMutation(
+    (body: ServiceInput) => apiSend<{ ok: true }>("/api/services", "POST", body),
+    { invalidates: ["/api/services", "/api/status/health"] },
+  );
+
+  const services = servicesQ.data?.services ?? [];
+  const kinds = servicesQ.data?.kinds ?? [];
+  const health = healthQ.data?.health ?? {};
+  const current = services.find((s) => s.kind === sel);
+  const fields = EXTRA_FIELDS[sel] ?? [];
+
+  // Re-seed the form whenever the selected kind changes or fresh data arrives
+  // (e.g. right after a save) — same load-then-reset flow as Save below.
   useEffect(() => {
-    const svc = data?.services?.find((s: any) => s.kind === sel);
-    setBaseUrl(svc?.baseUrl ?? DEFAULTS[sel] ?? ""); setSecret(""); setTest(null);
-    setLibraryId(svc?.extra?.libraryId != null ? String(svc.extra.libraryId) : "");
-    setWebhookToken(""); setWebhookTokenSet(!!svc?.extra?.webhookTokenSet);
-    const ex = svc?.extra ?? {};
-    setTs(Object.fromEntries(TS_FIELDS.map((f) => [f.key, ex[f.key] != null ? String(ex[f.key]) : ""])));
-    setTsMagnetDetail(!!ex.magnetOnDetailPage);
-  }, [sel, data]);
+    setBaseUrl(current?.baseUrl ?? meta(sel).defaultUrl);
+    setSecret("");
+    const draft: Record<string, string | boolean> = {};
+    for (const f of fields) {
+      draft[f.key] = f.kind === "checkbox" ? !!current?.extra[f.key] : strVal(current?.extra[f.key]);
+    }
+    setExtra(draft);
+    test.reset();
+    save.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sel, services]);
 
   function buildExtra(): Record<string, unknown> | undefined {
-    if (sel === "kavita") return { libraryId: libraryId === "" ? undefined : Number(libraryId) };
-    if (sel === "slskd") return webhookToken ? { webhookToken } : {};
-    if (sel === "torrentsearch") {
-      const out: Record<string, unknown> = { magnetOnDetailPage: tsMagnetDetail };
-      for (const f of TS_FIELDS) if (ts[f.key]?.trim()) out[f.key] = ts[f.key]!.trim();
-      return out;
+    if (fields.length === 0) return undefined;
+    const out: Record<string, unknown> = {};
+    for (const f of fields) {
+      const v = extra[f.key];
+      if (f.kind === "checkbox") { out[f.key] = !!v; continue; }
+      if (f.kind === "select") { if (typeof v === "string" && v) out[f.key] = v; continue; }
+      // Blank means "leave alone": for a secret that keeps the stored value,
+      // for anything else it resets to the adapter's built-in default —
+      // matches mergeExtra() in server/src/config/extra.ts.
+      if (typeof v === "string" && v.trim()) out[f.key] = f.kind === "number" ? Number(v.trim()) : v.trim();
     }
-    return undefined;
+    return out;
   }
 
-  const body = () => JSON.stringify({
-    kind: sel, label: sel, baseUrl,
-    secret: secret || undefined,
-    extra: buildExtra(),
-  });
+  function body(): ServiceInput {
+    return { kind: sel, label: meta(sel).label, baseUrl, secret: secret || undefined, extra: buildExtra() };
+  }
 
-  async function doTest() {
-    setBusy(true); setTest(null);
-    try { const r = await api("/api/services/test", { method: "POST", body: body() });
-      setTest(r.healthy ? `OK — ${r.version ?? r.detail ?? "healthy"}` : `Fail — ${r.detail}`);
-    } catch (e) { setTest(`Fail — ${(e as Error).message}`); } finally { setBusy(false); }
+  const counts = useMemo(() => {
+    let healthy = 0, attention = 0, unset = 0;
+    for (const k of kinds) {
+      const h = health[k];
+      if (!h || h.detail === "not configured") unset++;
+      else if (h.healthy) healthy++;
+      else attention++;
+    }
+    return { healthy, attention, unset };
+  }, [kinds, health]);
+
+  function edit(kind: string) {
+    setSel(kind);
+    formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
-  async function save() {
-    setBusy(true);
-    try { await api("/api/services", { method: "POST", body: body() }); await load(); setTest("Saved."); }
-    catch (e) { setTest((e as Error).message); } finally { setBusy(false); }
-  }
+
+  const secretConfigured = !!current?.secretMask;
+  const showSecretField = meta(sel).secretHint !== "not required";
 
   return (
-    <div>
-      <h1>Services (setup wizard)</h1>
-      <div className="card">
-        <h2>Configured</h2>
-        {data?.services?.map((s: any) => (
-          <div key={s.kind} className="row">
-            <span><span className={"dot " + (s.lastHealthy ? "ok" : "warn")} />{s.kind}</span>
-            <span className="muted small">{s.baseUrl} · {s.secretMask ?? "no secret"}</span>
+    <>
+      <PageHeader
+        title="Services"
+        subtitle="Connections and credentials for the *arr stack. Secrets are write-only — TorHQ never sends a stored one back to the browser."
+        actions={<RefreshButton q={servicesQ} />}
+      />
+
+      <Async q={servicesQ} what="services">
+        {() => (
+          <div className="stack">
+            <div className="stat-grid">
+              <Badge tone="ok" title="Reachable on the last health check">{counts.healthy} healthy</Badge>
+              <Badge tone={counts.attention ? "err" : "neutral"} title="Configured but the last check failed">{counts.attention} need attention</Badge>
+              <Badge tone="neutral" title="No connection saved yet">{counts.unset} not set up</Badge>
+            </div>
+
+            <Card title="Connections" icon="plug" flush>
+              <TableWrap>
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Service</th>
+                      <th>Base URL</th>
+                      <th>Secret</th>
+                      <th>Status</th>
+                      <th className="shrink" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {kinds.map((kind) => {
+                      const svc = services.find((s) => s.kind === kind);
+                      const h = health[kind];
+                      const tone = healthTone(h);
+                      return (
+                        <tr key={kind} className={kind === sel ? "selected" : undefined}>
+                          <td>
+                            <div className="row-nowrap" style={{ gap: 8 }}>
+                              <StatusDot tone={tone} />
+                              <div>
+                                <div>{meta(kind).label}</div>
+                                <div className="dim xs">{meta(kind).role}</div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="mono small break">
+                            {svc?.baseUrl ?? <span className="dim">not configured</span>}
+                          </td>
+                          <td>
+                            {meta(kind).secretHint === "not required"
+                              ? <span className="dim small">not required</span>
+                              : <Badge tone={svc?.secretMask ? "ok" : "warn"}>{svc?.secretMask ? "configured" : "not set"}</Badge>}
+                          </td>
+                          <td className="nowrap"><Badge tone={tone} title={h?.detail}>{healthLabel(h)}</Badge></td>
+                          <td className="shrink">
+                            <Button size="sm" variant="ghost" onClick={() => edit(kind)}>Edit</Button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </TableWrap>
+            </Card>
+
+            <div ref={formRef}>
+              <Card
+                title="Configure a connection"
+                subtitle={meta(sel).role}
+                icon="settings"
+              >
+                <div className="grid-2">
+                  <SelectField label="Service" value={sel} onChange={(e) => setSel(e.target.value)}>
+                    {kinds.map((k) => <option key={k} value={k}>{meta(k).label}</option>)}
+                  </SelectField>
+                  <TextField
+                    label="Base URL"
+                    value={baseUrl}
+                    onChange={(e) => setBaseUrl(e.target.value)}
+                    placeholder={meta(sel).defaultUrl}
+                  />
+                </div>
+
+                {showSecretField && (
+                  <Field
+                    label={`Secret (${meta(sel).secretHint})`}
+                    hint={
+                      <span className="row-nowrap" style={{ gap: 6 }}>
+                        {secretConfigured ? <Badge tone="ok">configured</Badge> : <Badge tone="warn">not set</Badge>}
+                        <span>Leave blank to keep the current value.</span>
+                      </span>
+                    }
+                  >
+                    <input
+                      type="password"
+                      className="input"
+                      autoComplete="new-password"
+                      value={secret}
+                      onChange={(e) => setSecret(e.target.value)}
+                      placeholder={secretConfigured ? "Unchanged if left blank" : "Required to connect"}
+                    />
+                  </Field>
+                )}
+
+                {sel === "torrentsearch" && (
+                  <p className="muted small">
+                    Point Base URL at a torrent-index mirror. Leave the selector fields below blank to use the
+                    built-in KAT-style defaults shown as placeholders — these mirrors rot and change often.
+                  </p>
+                )}
+
+                {fields.map((f) => {
+                  if (f.kind === "checkbox") {
+                    return (
+                      <div key={f.key} className="mt-2">
+                        <Checkbox
+                          label={f.label}
+                          checked={!!extra[f.key]}
+                          onChange={(v) => setExtra((s) => ({ ...s, [f.key]: v }))}
+                        />
+                      </div>
+                    );
+                  }
+                  if (f.kind === "select") {
+                    return (
+                      <SelectField
+                        key={f.key}
+                        label={f.label}
+                        value={strVal(extra[f.key]) || f.options[0]?.value}
+                        onChange={(e) => setExtra((s) => ({ ...s, [f.key]: e.target.value }))}
+                      >
+                        {f.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                      </SelectField>
+                    );
+                  }
+                  if (f.kind === "textarea") {
+                    return (
+                      <Field key={f.key} label={f.label} hint={f.hint}>
+                        <textarea
+                          className="textarea"
+                          value={strVal(extra[f.key])}
+                          placeholder={f.placeholder}
+                          onChange={(e) => setExtra((s) => ({ ...s, [f.key]: e.target.value }))}
+                        />
+                      </Field>
+                    );
+                  }
+                  return (
+                    <TextField
+                      key={f.key}
+                      label={f.label}
+                      hint={f.secret ? (current?.extra[`${f.key}Set`] ? "Set — leave blank to keep it." : f.hint) : f.hint}
+                      type={f.secret ? "password" : f.kind === "number" ? "number" : "text"}
+                      value={strVal(extra[f.key])}
+                      placeholder={f.placeholder}
+                      onChange={(e) => setExtra((s) => ({ ...s, [f.key]: e.target.value }))}
+                    />
+                  );
+                })}
+
+                <div className="row" style={{ marginTop: 4 }}>
+                  <Button pending={test.pending} onClick={() => void test.run(body())}>Test connection</Button>
+                  <Button variant="primary" pending={save.pending} onClick={() => void save.run(body())}>Save</Button>
+                </div>
+
+                {test.error && <Alert tone="err" title={`Test failed — ${meta(sel).label}`}>{test.error}</Alert>}
+                {test.data && (
+                  <Alert tone={test.data.healthy ? "ok" : "err"} title={`Tested ${meta(sel).label}`}>
+                    {test.data.healthy
+                      ? (test.data.version ? `Reachable — version ${test.data.version}` : "Reachable")
+                      : (test.data.detail ?? "Unhealthy")}
+                  </Alert>
+                )}
+                {save.error && <Alert tone="err" title="Save failed">{save.error}</Alert>}
+                {save.data && <Alert tone="ok" title="Saved">{meta(sel).label} connection saved.</Alert>}
+              </Card>
+            </div>
+
+            <StaleNotice q={servicesQ} />
           </div>
-        ))}
-        {!data?.services?.length && <p className="muted small">Nothing configured yet.</p>}
-      </div>
-
-      <div className="card">
-        <h2>Add / update</h2>
-        <label>Service</label>
-        <select value={sel} onChange={(e) => setSel(e.target.value)}>
-          {data?.kinds?.map((k: string) => <option key={k} value={k}>{k}</option>)}
-        </select>
-        <label>Base URL</label>
-        <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
-        <label>Secret ({SECRET_HINT[sel]}) — leave blank to keep existing</label>
-        <input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="••••••••" />
-
-        {sel === "kavita" && (
-          <>
-            <label>Kavita library ID (optional) — enables an explicit scan after import</label>
-            <input value={libraryId} onChange={(e) => setLibraryId(e.target.value)} placeholder="e.g. 3" inputMode="numeric" />
-          </>
         )}
-        {sel === "slskd" && (
-          <>
-            <label>Webhook token {webhookTokenSet ? "(set — leave blank to keep)" : "(enables the completed-download webhook)"}</label>
-            <input type="password" value={webhookToken} onChange={(e) => setWebhookToken(e.target.value)}
-              placeholder={webhookTokenSet ? "••••••••" : "shared secret for X-TorHQ-Token"} />
-          </>
-        )}
-        {sel === "torrentsearch" && (
-          <>
-            <p className="muted small" style={{ marginTop: 8 }}>
-              Point Base URL at a torrent-index mirror (e.g. a KickassTorrents proxy). Leave the
-              fields below blank to use the built-in KAT-style defaults shown as placeholders — only
-              override them if a mirror's markup differs. These sites rot and change often.
-            </p>
-            {TS_FIELDS.map((f) => (
-              <div key={f.key}>
-                <label>{f.label}</label>
-                <input value={ts[f.key] ?? ""} placeholder={f.placeholder}
-                  onChange={(e) => setTs((s) => ({ ...s, [f.key]: e.target.value }))} />
-              </div>
-            ))}
-            <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
-              <input type="checkbox" style={{ width: "auto" }} checked={tsMagnetDetail}
-                onChange={(e) => setTsMagnetDetail(e.target.checked)} />
-              Magnets are on each result's detail page (not the search results page)
-            </label>
-          </>
-        )}
-
-        <div className="flex" style={{ marginTop: 14 }}>
-          <button className="btn" onClick={doTest} disabled={busy}>Test connection</button>
-          <button className="btn primary" onClick={save} disabled={busy}>Save</button>
-          {test && <span className={"small " + (test.startsWith("OK") || test === "Saved." ? "ok-text" : "err-text")}>{test}</span>}
-        </div>
-      </div>
-    </div>
+      </Async>
+    </>
   );
 }
