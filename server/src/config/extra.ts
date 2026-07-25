@@ -34,15 +34,49 @@ const TorrentSearchExtra = z.object({
   flaresolverrUrl: z.string().url().max(512).optional(),
 });
 
+// Prowlarr is TorHQ's primary search backend: it already aggregates every
+// indexer you run, so there is nothing site-specific to configure — only which
+// indexers to query by default and how many results to keep.
+const ProwlarrExtra = z.object({
+  // Comma-separated indexer ids to search by default; blank = all enabled.
+  defaultIndexerIds: z.string().max(256).optional(),
+  searchLimit: z.coerce.number().int().min(10).max(500).optional(),
+});
+
+/**
+ * General web search. Three providers, in increasing order of setup cost:
+ *  - `link`     — no backend call at all; TorHQ builds Google/other query URLs
+ *                 you open in a tab. Always available, nothing to configure.
+ *  - `google`   — Google Programmable Search JSON API (needs an API key + the
+ *                 search-engine id `cx`). Results render inside TorHQ.
+ *  - `searxng`  — a self-hosted SearXNG instance's JSON API. No key, no quota.
+ * Google's HTML endpoint is deliberately NOT scraped: it blocks server-side
+ * fetches and doing so would violate their terms.
+ */
+const WebSearchExtra = z.object({
+  provider: z.enum(["link", "google", "searxng"]).optional(),
+  // google provider
+  googleCx: z.string().max(128).optional(),
+  googleApiKey: z.string().min(8).max(256).optional(), // write-only
+  // searxng provider
+  searxngUrl: z.string().url().max(512).optional(),
+  // Extra "search on <site>" shortcuts for the link provider, as a
+  // newline-separated `Label|https://example.com/search?q={q}` list.
+  linkTemplates: z.string().max(2048).optional(),
+});
+
 const EXTRA_SCHEMAS: Partial<Record<string, z.ZodTypeAny>> = {
   kavita: KavitaExtra,
   slskd: SlskdExtra,
   torrentsearch: TorrentSearchExtra,
+  prowlarr: ProwlarrExtra,
+  websearch: WebSearchExtra,
 };
 
 /** Fields that are secret/write-only per kind (never sent to the browser). */
 const SECRET_EXTRA_KEYS: Record<string, string[]> = {
   slskd: ["webhookToken"],
+  websearch: ["googleApiKey"],
 };
 
 /** Whether a service kind exposes any configurable extra settings. */
