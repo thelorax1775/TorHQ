@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readdirSync } from "node:fs";
+import {
+  mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readdirSync,
+  statSync, lstatSync, symlinkSync, readlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -25,12 +28,22 @@ beforeAll(() => {
   mkdirSync(libDir("downloads"), { recursive: true });
   mkdirSync(libDir("staging", "manga"), { recursive: true });
   mkdirSync(libDir("libraries", "manga"), { recursive: true });
+  mkdirSync(libDir("staging", "seeded"), { recursive: true });
+  mkdirSync(libDir("libraries", "seeded"), { recursive: true });
 
   initDb(dataDir);
   runMigrations();
   upsertLibrary({
     key: "kavita-manga", label: "Manga", kind: "manga", targetService: "kavita",
-    destPath: libDir("libraries", "manga"), stagingPath: libDir("staging", "manga"), rescan: true,
+    destPath: libDir("libraries", "manga"), stagingPath: libDir("staging", "manga"),
+    rescan: true, importMode: "move",
+  });
+  // The same library wired for hardlink imports, so a torrent can keep seeding
+  // from the source after its content has been imported.
+  upsertLibrary({
+    key: "kavita-seeded", label: "Seeded", kind: "manga", targetService: "kavita",
+    destPath: libDir("libraries", "seeded"), stagingPath: libDir("staging", "seeded"),
+    rescan: true, importMode: "link",
   });
 });
 
@@ -123,6 +136,57 @@ describe("runIntake state machine", () => {
       { libraryKey: "kavita-manga", sourcePath: libDir("downloads", "Nope") },
       [root], masterKey,
     )).rejects.toThrow(PathValidationError);
+  });
+});
+
+describe("hardlink import mode", () => {
+  // The point of link mode: import without copying bytes and without taking the
+  // files away from whatever is still using them — a seeding torrent, usually.
+  it("imports without copying and leaves the source in place", async () => {
+    const src = makeSource("Linked Series");
+    const res = await runIntake("job-link", { libraryKey: "kavita-seeded", sourcePath: src }, [root], masterKey);
+
+    const dest = libDir("libraries", "seeded", "Linked Series");
+    expect(res.destPath).toBe(dest);
+    expect(readdirSync(dest).sort()).toEqual(["ch1.cbz", "ch2.cbz"]);
+    // The source survives, intact.
+    expect(readdirSync(src).sort()).toEqual(["ch1.cbz", "ch2.cbz"]);
+    expect(readdirSync(libDir("staging", "seeded"))).toEqual([]);
+  });
+
+  it("shares inodes rather than duplicating the data", async () => {
+    const src = makeSource("Inode Series");
+    await runIntake("job-inode", { libraryKey: "kavita-seeded", sourcePath: src }, [root], masterKey);
+    const a = statSync(join(src, "ch1.cbz"));
+    const b = statSync(libDir("libraries", "seeded", "Inode Series", "ch1.cbz"));
+    expect(b.ino).toBe(a.ino);
+    expect(b.nlink).toBe(2);
+  });
+
+  it("recreates symlinks verbatim instead of linking through them", async () => {
+    const src = makeSource("Symlink Series");
+    symlinkSync("../elsewhere/target.cbz", join(src, "link.cbz"));
+    await runIntake("job-symlink", { libraryKey: "kavita-seeded", sourcePath: src }, [root], masterKey);
+    const imported = libDir("libraries", "seeded", "Symlink Series", "link.cbz");
+    expect(lstatSync(imported).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(imported)).toBe("../elsewhere/target.cbz");
+  });
+
+  it("does not delete the source on the idempotent already-imported path", async () => {
+    const src = makeSource("Twice Series");
+    await runIntake("job-twice-1", { libraryKey: "kavita-seeded", sourcePath: src }, [root], masterKey);
+    const res = await runIntake("job-twice-2", { libraryKey: "kavita-seeded", sourcePath: src }, [root], masterKey);
+    expect(res.alreadyImported).toBe(true);
+    expect(existsSync(src)).toBe(true);
+  });
+
+  it("warns about deletion only for a library that actually deletes", async () => {
+    const move = await previewIntake({ libraryKey: "kavita-manga", sourcePath: makeSource("W1") }, [root]);
+    const link = await previewIntake({ libraryKey: "kavita-seeded", sourcePath: makeSource("W2") }, [root]);
+    expect(move.importMode).toBe("move");
+    expect(move.warnings.join(" ")).toContain("deleted");
+    expect(link.importMode).toBe("link");
+    expect(link.warnings.join(" ")).not.toContain("deleted");
   });
 });
 

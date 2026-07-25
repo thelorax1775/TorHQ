@@ -52,7 +52,7 @@ over your \*arr apps' pipelines.
 | **Downloads** | Full qBittorrent control — pause/resume/recheck, priority, category moves, and both flavours of removal, with the destructive one gated behind a typed confirmation. |
 | **Queue** | The Radarr/Sonarr/Lidarr queues merged into one view, with the \*arr's own error messages surfaced, plus per-item removal and blocklisting. One dead service degrades to a notice; it never blanks the view. |
 | **Pipeline health** | Read-only checks of the grab → download → import path: does the \*arr have a download client, do its categories match, can it actually see the directory qBittorrent writes to. Each failing check names the fix — TorHQ never applies one silently. |
-| **Manual intake** | Preview and then atomically import a completed file/folder into a **Kavita** (books/manga/comics) or **Navidrome** (music) library, then trigger a rescan. Durable, idempotent, retried. |
+| **Manual intake** | Preview and then atomically import a completed file/folder into a **Kavita** (books/manga/comics) or **Navidrome** (music) library, then trigger a rescan. Per library, either moves the source in or **hardlinks** it so a seeding torrent is left intact. Durable, idempotent, retried. |
 | **slskd webhook** | Completed Soulseek downloads are pushed to `/webhooks/slskd` (shared-token auth) and enqueued as intake jobs into a music library. |
 | **Services** | Encrypted-at-rest credential storage with a connection tester. Secrets are never returned to the browser. |
 
@@ -127,6 +127,19 @@ is explicit and previewed end-to-end:
 3. On approval, a durable job **atomically imports** the content into the
    library's destination via a same-filesystem staging directory, then requests a
    **rescan** of the target service (Kavita or Navidrome).
+
+Each library chooses **how** step 3 gets the bytes across:
+
+| Import mode | What happens | Use it when |
+|---|---|---|
+| **Move** (default) | Copies the source into staging, reveals it atomically, then **deletes the source**. | The source is a scratch drop directory you want emptied. |
+| **Hardlink** | Gives the files a second name inside the library. No bytes are read or written, no extra disk space is used, and **the source is left exactly as it was**. | The source is a torrent that is still seeding, or anything else you are not willing to lose. |
+
+Hardlink mode is the same trick the \*arr use to import a completed download
+without disturbing the torrent behind it. It requires the source and the library
+to be on **one filesystem** — if they are not, the import fails with an
+explanation rather than silently falling back to a copy-and-delete that would
+break the seed.
 
 Manual-intake destinations may only target **Kavita** or **Navidrome**. Jellyfin
 (movies/TV) is intentionally *not* an intake target — that content is \*arr-owned.
@@ -316,7 +329,9 @@ tells you.
 3. **Define intake libraries** (only if you use manual intake). On the
    **Libraries** page, create Kavita/Navidrome destinations. Both the destination
    and staging paths must live inside an approved root and, for atomic imports,
-   on the same filesystem.
+   on the same filesystem. Pick an **import mode** per library: *Move* deletes
+   the source once the import succeeds; *Hardlink* imports in place and leaves it
+   alone, which is what you want when importing off a seeding torrent.
 
 4. **Create qBittorrent categories.** One per *arr, plus one you own:
    `radarr`, `sonarr`, `lidarr`, `torhq-manual`. The category is how a finished
@@ -426,10 +441,14 @@ everything after.
 comics and music going to Kavita/Navidrome. **Preview is mandatory** — a dry run
 validates both paths against the approved roots and shows exactly what would
 move, and the Import button disables itself the moment the form stops matching
-the preview, so a stale preview can never justify a different import. This never
-touches a Radarr/Sonarr/Lidarr library.
+the preview, so a stale preview can never justify a different import. The preview
+also states what will happen to the source — a library in *Move* mode raises an
+explicit warning that the source is about to be deleted. This never touches a
+Radarr/Sonarr/Lidarr library.
 
-**Libraries** — the Kavita/Navidrome destinations intake can target. Removing one
+**Libraries** — the Kavita/Navidrome destinations intake can target, each with
+its **import mode** (*Move* or *Hardlink* — see
+[the intake boundary](#the-intake-boundary-torhq-vs-the-arr)). Removing one
 only makes TorHQ forget it; nothing on disk is deleted, and the removal is
 refused while intake jobs are still queued against it.
 

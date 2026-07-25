@@ -9,6 +9,22 @@ import type { Library } from "../db/schema.js";
 import { safeResolve, safeFilename, PathValidationError } from "../security/paths.js";
 import { logActivity } from "../lib/activity.js";
 
+/**
+ * How an intake gets the bytes from source to destination.
+ *
+ * - `move`: copy into staging, reveal atomically, then delete the source. The
+ *   source directory is consumed; use it for a scratch/import drop area.
+ * - `link`: hardlink into staging, reveal atomically, and leave the source
+ *   exactly as it was. The library and the source share the same inodes, so the
+ *   import is instant, costs no extra disk space, and a torrent still seeding
+ *   from the source keeps seeding. Requires both to be on one filesystem.
+ */
+export type ImportMode = "move" | "link";
+
+export function importMode(lib: Pick<Library, "importMode">): ImportMode {
+  return lib.importMode === "link" ? "link" : "move";
+}
+
 export interface IntakePayload {
   libraryKey: string;
   sourcePath: string;
@@ -19,6 +35,7 @@ export interface IntakePreview {
   libraryKey: string;
   sourcePath: string;
   destPath: string;
+  importMode: ImportMode;
   entries: Array<{ name: string; size: number; isDir: boolean }>;
   totalBytes: number;
   warnings: string[];
@@ -84,7 +101,9 @@ export async function previewIntake(
 ): Promise<IntakePreview> {
   const { lib, destPath, source } = resolvePaths(payload, approvedRoots, { requireSource: true });
   const src = source!;
+  const mode = importMode(lib);
   const warnings: string[] = [];
+  if (mode === "move") warnings.push("The source will be deleted once the import completes.");
 
   const entries: IntakePreview["entries"] = [];
   let totalBytes = 0;
@@ -101,7 +120,7 @@ export async function previewIntake(
     entries.push({ name: basename(src), size: stat.size, isDir: false });
     totalBytes = stat.size;
   }
-  return { libraryKey: lib.key, sourcePath: src, destPath, entries, totalBytes, warnings };
+  return { libraryKey: lib.key, sourcePath: src, destPath, importMode: mode, entries, totalBytes, warnings };
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -109,13 +128,65 @@ async function exists(path: string): Promise<boolean> {
 }
 
 /**
+ * Recreate `src` at `dest` as a tree of hardlinks: directories are made fresh,
+ * regular files get a second name pointing at the same inode, symlinks are
+ * recreated verbatim rather than followed.
+ *
+ * No file content is read or written, so this is effectively instantaneous and
+ * uses no additional space — the same trick the *arr use to import a completed
+ * download without disturbing the torrent that is still seeding it.
+ */
+async function linkTree(src: string, dest: string): Promise<void> {
+  const st = await fs.lstat(src);
+  if (st.isSymbolicLink()) {
+    await fs.symlink(await fs.readlink(src), dest);
+    return;
+  }
+  if (st.isDirectory()) {
+    await fs.mkdir(dest, { recursive: true });
+    for (const name of await fs.readdir(src)) await linkTree(join(src, name), join(dest, name));
+    return;
+  }
+  if (!st.isFile()) throw new Error(`Cannot hardlink ${basename(src)}: not a regular file, directory, or symlink.`);
+  await fs.link(src, dest);
+}
+
+/**
+ * A hardlink import that fails partway leaves the caller with a half-built
+ * staging tree and an errno. Translate the ones with a real cause into the
+ * action that fixes them; anything else propagates unchanged.
+ */
+function explainLinkFailure(err: unknown, source: string, destPath: string): Error {
+  const code = (err as NodeJS.ErrnoException)?.code;
+  if (code === "EXDEV") {
+    return new Error(
+      `Cannot hardlink ${source} into ${destPath}: they are on different filesystems. ` +
+      `A hardlink import requires the source and the library to live on one filesystem. ` +
+      `Either move the library's destination onto the source's filesystem, or switch ` +
+      `this library to move mode — but note that move mode deletes the source.`,
+    );
+  }
+  if (code === "EPERM" || code === "EACCES") {
+    return new Error(
+      `Cannot hardlink ${source} into ${destPath}: permission denied. Hardlinking needs ` +
+      `write access to the destination directory and read access to the source; some ` +
+      `filesystems (and NFS exports without the right options) refuse links outright.`,
+    );
+  }
+  if (code === "EMLINK") {
+    return new Error(`Cannot hardlink ${source}: the file already has the maximum number of links this filesystem allows.`);
+  }
+  return err as Error;
+}
+
+/**
  * Execute an intake job as an explicit, restart-safe state machine:
  *
  *   validate → [already imported? → rescan → done]
- *            → stage  (copy source into a per-job staging workdir)
+ *            → stage  (copy or hardlink source into a per-job staging workdir)
  *            → commit (ATOMIC rename staging → destination; the only reveal
  *                      to the media scanner)
- *            → cleanup (remove the consumed source + staging workdir)
+ *            → cleanup (staging workdir; plus the source in move mode only)
  *            → rescan (best-effort; import already succeeded)
  *
  * Properties:
@@ -126,7 +197,8 @@ async function exists(path: string): Promise<boolean> {
  *    half-imported item.
  *  - Restart-safe: the per-job staging workdir is deterministic and any stale
  *    remnant from a prior attempt is cleared before re-staging.
- *  - Non-destructive to the source until the atomic commit has succeeded.
+ *  - Non-destructive to the source until the atomic commit has succeeded — and
+ *    in `link` mode, never destructive to it at all.
  */
 export async function runIntake(
   jobId: string,
@@ -136,12 +208,15 @@ export async function runIntake(
 ): Promise<{ destPath: string; alreadyImported: boolean }> {
   const { lib, destBase, destPath, stagingBase, finalName, source } =
     resolvePaths(payload, approvedRoots, { requireSource: false });
+  const mode = importMode(lib);
 
   // Idempotency: destination already present → treat as imported. Makes a retry
   // after a crash between commit and completion a no-op instead of a duplicate.
   if (await exists(destPath)) {
-    logActivity({ kind: "info", jobId, service: lib.targetService, message: `Destination already present, skipping move: ${finalName}` });
-    if (source && source !== destPath) await fs.rm(source, { recursive: true, force: true }).catch(() => {});
+    logActivity({ kind: "info", jobId, service: lib.targetService, message: `Destination already present, skipping import: ${finalName}` });
+    if (mode === "move" && source && source !== destPath) {
+      await fs.rm(source, { recursive: true, force: true }).catch(() => {});
+    }
     await maybeRescan(lib, jobId, masterKey);
     logActivity({ kind: "imported", jobId, service: lib.targetService, message: `Imported ${finalName} (already present)` });
     return { destPath, alreadyImported: true };
@@ -156,13 +231,27 @@ export async function runIntake(
   // (dot-prefixed so watchers ignore it), and outside the library directory.
   const workDir = join(stagingBase, `.intake-${jobId}`);
   const staged = join(workDir, finalName);
-  logActivity({ kind: "importing", jobId, service: lib.targetService, message: `Staging ${finalName}` });
+  logActivity({
+    kind: "importing", jobId, service: lib.targetService,
+    message: mode === "link" ? `Linking ${finalName}` : `Staging ${finalName}`,
+  });
   await fs.rm(workDir, { recursive: true, force: true }); // clear any stale remnant
   await fs.mkdir(workDir, { recursive: true });
   try {
-    // Copy (not move) so the source survives until the atomic commit succeeds,
-    // which keeps retries safe. Symlinks are preserved verbatim, not followed.
-    await fs.cp(source, staged, { recursive: true, verbatimSymlinks: true });
+    if (mode === "link") {
+      // Hardlink rather than copy: no bytes are read or written, so this is
+      // instant regardless of size, and the source keeps its own name for as
+      // long as anything (a seeding torrent, say) still needs it.
+      try {
+        await linkTree(source, staged);
+      } catch (err) {
+        throw explainLinkFailure(err, source, destPath);
+      }
+    } else {
+      // Copy (not move) so the source survives until the atomic commit succeeds,
+      // which keeps retries safe. Symlinks are preserved verbatim, not followed.
+      await fs.cp(source, staged, { recursive: true, verbatimSymlinks: true });
+    }
 
     // --- commit ------------------------------------------------------------
     await fs.mkdir(destBase, { recursive: true });
@@ -184,12 +273,18 @@ export async function runIntake(
   }
 
   // --- cleanup source ------------------------------------------------------
-  await fs.rm(source, { recursive: true, force: true }).catch(() => {});
+  // Only in move mode. In link mode the destination and the source are the same
+  // inodes under two names, so removing the source would silently take a seeding
+  // torrent's files away from it while the library kept working.
+  if (mode === "move") await fs.rm(source, { recursive: true, force: true }).catch(() => {});
 
   // --- rescan (best-effort; the import already succeeded) ------------------
   await maybeRescan(lib, jobId, masterKey);
 
-  logActivity({ kind: "imported", jobId, service: lib.targetService, message: `Imported ${finalName}` });
+  logActivity({
+    kind: "imported", jobId, service: lib.targetService,
+    message: mode === "link" ? `Imported ${finalName} (source kept)` : `Imported ${finalName}`,
+  });
   return { destPath, alreadyImported: false };
 }
 

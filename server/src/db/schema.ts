@@ -57,6 +57,10 @@ export const libraries = sqliteTable("libraries", {
   destPath: text("dest_path").notNull(), // must be inside approved roots
   stagingPath: text("staging_path").notNull(),
   rescan: integer("rescan", { mode: "boolean" }).notNull().default(true),
+  // How the bytes get from source to destination: "move" copies then deletes the
+  // source; "link" hardlinks and leaves the source untouched, so importing from
+  // a still-seeding torrent costs no extra space and does not break the seed.
+  importMode: text("import_mode").notNull().default("move"), // move|link
 });
 
 /** Durable job queue for manual intake pipelines. */

@@ -25,6 +25,9 @@ const LibraryInput = z.object({
   destPath: z.string().min(1),
   stagingPath: z.string().min(1),
   rescan: z.boolean().optional(),
+  // "move" consumes the source; "link" hardlinks and leaves it in place, which
+  // is what lets an import run straight off a still-seeding download.
+  importMode: z.enum(["move", "link"]).optional(),
 });
 
 const LibraryKeyParam = z.object({ key: z.string().min(1).max(64).regex(/^[a-z0-9-]+$/) });
@@ -72,7 +75,7 @@ export function setupRoutes(app: FastifyInstance, ctx: AppContext): void {
     } catch (e) {
       return reply.code(400).send({ error: (e as Error).message });
     }
-    upsertLibrary({ ...body, rescan: body.rescan ?? true });
+    upsertLibrary({ ...body, rescan: body.rescan ?? true, importMode: body.importMode ?? "move" });
     return { ok: true };
   });
 

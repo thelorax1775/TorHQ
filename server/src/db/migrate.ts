@@ -96,8 +96,20 @@ const MIGRATIONS: Migration[] = [
     name: "baseline",
     up: (db) => db.exec(BASELINE_DDL),
   },
+  {
+    version: 2,
+    name: "libraries_add_import_mode",
+    // Existing libraries keep the original copy-then-delete behaviour; "link" is
+    // opt-in per library so enabling it can never silently start (or stop)
+    // deleting a source directory that something else still depends on.
+    up: (db) => {
+      if (!hasColumn(db, "libraries", "import_mode")) {
+        db.exec("ALTER TABLE libraries ADD COLUMN import_mode TEXT NOT NULL DEFAULT 'move'");
+      }
+    },
+  },
   // Future schema changes go here as new numbered migrations, e.g.:
-  // { version: 2, name: "jobs_add_started_at",
+  // { version: 3, name: "jobs_add_started_at",
   //   up: (db) => { if (!hasColumn(db, "jobs", "started_at")) db.exec("ALTER TABLE jobs ADD COLUMN started_at INTEGER"); } },
 ];
 

@@ -130,6 +130,16 @@ export const openApiDoc = {
           destPath: { type: "string", description: "Must resolve inside an approved root." },
           stagingPath: { type: "string", description: "Must be inside an approved root, on the same filesystem as destPath." },
           rescan: { type: "boolean" },
+          importMode: {
+            type: "string",
+            enum: ["move", "link"],
+            default: "move",
+            description:
+              "How intake gets bytes from source to destination. 'move' copies into staging, reveals atomically, " +
+              "then deletes the source. 'link' hardlinks instead: instant, no extra disk space, and the source is " +
+              "left in place — the only safe choice when importing from a torrent that is still seeding. 'link' " +
+              "requires the source and destination to be on one filesystem and fails with a clear error otherwise.",
+          },
         },
       },
       Candidate: {
@@ -174,6 +184,7 @@ export const openApiDoc = {
           libraryKey: { type: "string" },
           sourcePath: { type: "string" },
           destPath: { type: "string" },
+          importMode: { type: "string", enum: ["move", "link"] },
           totalBytes: { type: "integer" },
           warnings: { type: "array", items: { type: "string" } },
           entries: {

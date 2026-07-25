@@ -29,6 +29,7 @@ interface Library {
   destPath: string;
   stagingPath: string;
   rescan: boolean;
+  importMode: "move" | "link";
 }
 interface LibrariesResponse { libraries: Library[] }
 interface RootsResponse { approvedRoots: string[] }
@@ -37,6 +38,7 @@ interface IntakePreview {
   libraryKey: string;
   sourcePath: string;
   destPath: string;
+  importMode: "move" | "link";
   entries: Array<{ name: string; size: number; isDir: boolean }>;
   totalBytes: number;
   warnings: string[];
@@ -162,7 +164,15 @@ export function Intake() {
               roots above, or fix <span className="mono">TORHQ_APPROVED_ROOTS</span> on the Settings page.
             </Alert>
           )}
-          {lib && <p className="muted small">Destination: <span className="mono">{lib.destPath}</span> · staged via <span className="mono">{lib.stagingPath}</span></p>}
+          {lib && (
+            <p className="muted small">
+              Destination: <span className="mono">{lib.destPath}</span> · staged via <span className="mono">{lib.stagingPath}</span>
+              {" · "}
+              {lib.importMode === "link"
+                ? "hardlinked in place, so the source is left untouched and keeps seeding"
+                : "copied in, then the source is deleted"}
+            </p>
+          )}
 
           <div className="row">
             <Button icon="search" disabled={!canPreview} pending={preview.pending} onClick={() => void doPreview()}>Preview</Button>
@@ -192,7 +202,10 @@ export function Intake() {
       {preview.data && (
         <Card
           title="Preview"
-          subtitle={`→ ${preview.data.destPath} · ${bytes(preview.data.totalBytes)} · ${preview.data.entries.length} entries`}
+          subtitle={
+            `→ ${preview.data.destPath} · ${bytes(preview.data.totalBytes)} · ${preview.data.entries.length} entries` +
+            (preview.data.importMode === "link" ? " · hardlinked, source kept" : "")
+          }
           icon="folder"
         >
           {preview.data.warnings.map((w, i) => <Alert key={i} tone="warn">{w}</Alert>)}

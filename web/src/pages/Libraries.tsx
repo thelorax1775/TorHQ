@@ -18,6 +18,7 @@ import {
 
 type LibraryKind = "books" | "manga" | "comics" | "music";
 type TargetService = "kavita" | "navidrome";
+type ImportMode = "move" | "link";
 
 interface Library {
   key: string;
@@ -27,17 +28,21 @@ interface Library {
   destPath: string;
   stagingPath: string;
   rescan: boolean;
+  importMode: ImportMode;
 }
 interface LibrariesResponse { libraries: Library[] }
 interface RootsResponse { approvedRoots: string[] }
 
 const KIND_LABEL: Record<LibraryKind, string> = { books: "Books", manga: "Manga", comics: "Comics", music: "Music" };
 const TARGET_LABEL: Record<TargetService, string> = { kavita: "Kavita", navidrome: "Navidrome" };
+const MODE_LABEL: Record<ImportMode, string> = { move: "Move", link: "Hardlink" };
 /** Kavita serves books/manga/comics; Navidrome serves music. Not a user choice. */
 const targetFor = (kind: LibraryKind): TargetService => (kind === "music" ? "navidrome" : "kavita");
 
 type FormState = Omit<Library, "targetService">;
-const EMPTY_FORM: FormState = { key: "", label: "", kind: "books", destPath: "", stagingPath: "", rescan: true };
+const EMPTY_FORM: FormState = {
+  key: "", label: "", kind: "books", destPath: "", stagingPath: "", rescan: true, importMode: "move",
+};
 const KEY_RE = /^[a-z0-9-]+$/;
 
 export function Libraries() {
@@ -62,7 +67,10 @@ export function Libraries() {
     setForm((f) => ({ ...f, [key]: value }));
   }
   function startEdit(lib: Library) {
-    setForm({ key: lib.key, label: lib.label, kind: lib.kind, destPath: lib.destPath, stagingPath: lib.stagingPath, rescan: lib.rescan });
+    setForm({
+      key: lib.key, label: lib.label, kind: lib.kind, destPath: lib.destPath,
+      stagingPath: lib.stagingPath, rescan: lib.rescan, importMode: lib.importMode ?? "move",
+    });
     setEditing(true);
     save.reset();
   }
@@ -104,6 +112,7 @@ export function Libraries() {
                       <th>Target</th>
                       <th>Destination</th>
                       <th>Staging</th>
+                      <th>Import</th>
                       <th>Rescan</th>
                       <th className="shrink" />
                     </tr>
@@ -119,6 +128,11 @@ export function Libraries() {
                         <td className="nowrap">{TARGET_LABEL[l.targetService]}</td>
                         <td className="truncate mono small" style={{ maxWidth: 260 }} title={l.destPath}>{l.destPath}</td>
                         <td className="truncate mono small" style={{ maxWidth: 220 }} title={l.stagingPath}>{l.stagingPath}</td>
+                        <td className="nowrap">
+                          <Badge tone={l.importMode === "link" ? "ok" : "neutral"}>
+                            {MODE_LABEL[l.importMode ?? "move"]}
+                          </Badge>
+                        </td>
                         <td className="nowrap">{l.rescan ? "Yes" : "No"}</td>
                         <td className="shrink row-nowrap">
                           <Button size="sm" variant="ghost" icon="settings" title="Edit" aria-label={`Edit ${l.label}`} onClick={() => startEdit(l)} />
@@ -193,9 +207,27 @@ export function Libraries() {
             value={form.stagingPath}
             onChange={(e) => set("stagingPath", e.target.value)}
             placeholder="/srv/torhq/staging/manga"
-            hint="Working directory intake copies into before the atomic move to the destination."
+            hint={
+              form.importMode === "link"
+                ? "Working directory intake builds the hardlinks in before the atomic move. Must be on the same filesystem as the destination."
+                : "Working directory intake copies into before the atomic move to the destination."
+            }
             required
           />
+
+          <SelectField
+            label="Import mode"
+            value={form.importMode}
+            onChange={(e) => set("importMode", e.target.value as ImportMode)}
+            hint={
+              form.importMode === "link"
+                ? "Hardlinks the files into the library: instant, no extra disk space, and the source is left alone — so a torrent seeding from it keeps seeding. Source and destination must share one filesystem."
+                : "Copies the files in, then deletes the source once the import has succeeded. Use this for a scratch drop directory, not for anything still being seeded."
+            }
+          >
+            <option value="move">Move — copy in, then delete the source</option>
+            <option value="link">Hardlink — import in place, keep the source</option>
+          </SelectField>
 
           <Checkbox
             label={`Ask ${TARGET_LABEL[target]} to rescan after each import`}
