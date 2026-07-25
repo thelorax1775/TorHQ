@@ -66,6 +66,12 @@ const MAX_DETAIL_FETCHES = 10; // cap the N+1 when magnets are only on detail pa
 const DEFAULT_SOLVER_TIMEOUT_MS = 120_000;
 /** Let the solver's own deadline expire first, so we get its error, not a hang-up. */
 const SOLVER_GRACE_MS = 5_000;
+/**
+ * A health probe only has to fetch the base URL, but through a solver that still
+ * means launching a browser. Long enough not to call a working mirror dead,
+ * short enough that the sources page does not sit on a full solve budget.
+ */
+const SOLVER_PROBE_TIMEOUT_MS = 45_000;
 
 export class TorrentSearchAdapter implements ServiceAdapter {
   readonly kind = "torrentsearch";
@@ -89,6 +95,15 @@ export class TorrentSearchAdapter implements ServiceAdapter {
     };
     this.flaresolverrUrl = str(extra.flaresolverrUrl) ?? null;
     this.solverTimeoutMs = num(extra.solverTimeoutMs) ?? DEFAULT_SOLVER_TIMEOUT_MS;
+  }
+
+  /**
+   * How long a caller should allow this adapter's health check, or undefined to
+   * use their own default. Going through a solver means a browser start-up, so
+   * the usual few-second probe budget marks a perfectly good mirror unavailable.
+   */
+  get probeTimeoutMs(): number | undefined {
+    return this.flaresolverrUrl ? SOLVER_PROBE_TIMEOUT_MS : undefined;
   }
 
   async health(): Promise<HealthResult> {
