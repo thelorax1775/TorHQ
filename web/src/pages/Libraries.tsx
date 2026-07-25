@@ -1,73 +1,201 @@
-import { useEffect, useState } from "react";
-import { api } from "../lib/api.js";
+/**
+ * Libraries — destination rules for manual intake (books/manga/comics/music
+ * into Kavita or Navidrome). Unrelated to the *arr, which own their own
+ * libraries end to end; this page never touches Radarr/Sonarr/Lidarr media.
+ *
+ * Consumes `GET /api/libraries`, `GET /api/config/roots` and
+ * `POST /api/libraries` (upsert by `key` — there is no delete endpoint, so a
+ * library once created can be edited but not removed from here).
+ */
+import { useState, type FormEvent } from "react";
+import { apiSend } from "../lib/api.js";
+import { useMutation } from "../lib/useMutation.js";
+import { usePolled } from "../lib/usePolled.js";
+import {
+  Alert, Async, Badge, Button, Card, Checkbox, EmptyState, PageHeader,
+  RefreshButton, SelectField, TableWrap, TextField,
+} from "../components/ui.js";
+
+type LibraryKind = "books" | "manga" | "comics" | "music";
+type TargetService = "kavita" | "navidrome";
+
+interface Library {
+  key: string;
+  label: string;
+  kind: LibraryKind;
+  targetService: TargetService;
+  destPath: string;
+  stagingPath: string;
+  rescan: boolean;
+}
+interface LibrariesResponse { libraries: Library[] }
+interface RootsResponse { approvedRoots: string[] }
+
+const KIND_LABEL: Record<LibraryKind, string> = { books: "Books", manga: "Manga", comics: "Comics", music: "Music" };
+const TARGET_LABEL: Record<TargetService, string> = { kavita: "Kavita", navidrome: "Navidrome" };
+/** Kavita serves books/manga/comics; Navidrome serves music. Not a user choice. */
+const targetFor = (kind: LibraryKind): TargetService => (kind === "music" ? "navidrome" : "kavita");
+
+type FormState = Omit<Library, "targetService">;
+const EMPTY_FORM: FormState = { key: "", label: "", kind: "books", destPath: "", stagingPath: "", rescan: true };
+const KEY_RE = /^[a-z0-9-]+$/;
 
 export function Libraries() {
-  const [libs, setLibs] = useState<any[]>([]);
-  const [roots, setRoots] = useState<string[]>([]);
-  const [form, setForm] = useState({
-    key: "", label: "", kind: "books", targetService: "kavita",
-    destPath: "", stagingPath: "", rescan: true,
-  });
-  const [msg, setMsg] = useState<string | null>(null);
+  const q = usePolled<LibrariesResponse>("/api/libraries", 0);
+  const roots = usePolled<RootsResponse>("/api/config/roots", 0);
 
-  const load = async () => {
-    setLibs((await api("/api/libraries")).libraries);
-    setRoots((await api("/api/config/roots")).approvedRoots);
-  };
-  useEffect(() => { load(); }, []);
+  const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const [editing, setEditing] = useState(false);
 
-  async function save() {
-    setMsg(null);
-    try { await api("/api/libraries", { method: "POST", body: JSON.stringify(form) }); await load(); setMsg("Saved."); }
-    catch (e) { setMsg((e as Error).message); }
+  const save = useMutation(
+    (body: Library) => apiSend<{ ok: true }>("/api/libraries", "POST", body),
+    { invalidates: ["/api/libraries"] },
+  );
+
+  function set<K extends keyof FormState>(key: K, value: FormState[K]) {
+    setForm((f) => ({ ...f, [key]: value }));
   }
-  const set = (k: string, v: any) => setForm((f) => ({ ...f, [k]: v }));
+  function startEdit(lib: Library) {
+    setForm({ key: lib.key, label: lib.label, kind: lib.kind, destPath: lib.destPath, stagingPath: lib.stagingPath, rescan: lib.rescan });
+    setEditing(true);
+    save.reset();
+  }
+  function startNew() {
+    setForm(EMPTY_FORM);
+    setEditing(false);
+    save.reset();
+  }
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    await save.run({ ...form, targetService: targetFor(form.kind) });
+  }
+
+  const approvedRoots = roots.data?.approvedRoots ?? [];
+  const target = targetFor(form.kind);
+  const keyValid = KEY_RE.test(form.key);
+  const canSave = keyValid && form.label.trim() !== "" && form.destPath.trim() !== "" && form.stagingPath.trim() !== "";
 
   return (
-    <div>
-      <h1>Intake libraries</h1>
-      <p className="muted small">Destination rules for manual intake. Paths must live inside approved roots: {roots.join(", ")}</p>
+    <>
+      <PageHeader
+        title="Libraries"
+        subtitle="Where manual intake copies books, manga, comics and music. Radarr, Sonarr and Lidarr manage their own libraries and never go through this."
+        actions={<RefreshButton q={q} />}
+      />
 
-      <div className="card">
-        <h2>Configured</h2>
-        {libs.map((l) => (
-          <div key={l.key} className="row">
-            <span>{l.label} <span className="badge">{l.kind}</span></span>
-            <span className="muted small">→ {l.targetService} · {l.destPath}</span>
-          </div>
-        ))}
-        {!libs.length && <p className="muted small">No libraries yet.</p>}
-      </div>
+      <Card title="Configured" icon="book">
+        <Async q={q} what="libraries">
+          {(data) => (
+            data.libraries.length === 0 ? (
+              <EmptyState icon="book" title="No libraries yet" message="Add one below before queuing a manual intake." />
+            ) : (
+              <TableWrap>
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Library</th>
+                      <th>Kind</th>
+                      <th>Target</th>
+                      <th>Destination</th>
+                      <th>Staging</th>
+                      <th>Rescan</th>
+                      <th className="shrink" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.libraries.map((l) => (
+                      <tr key={l.key}>
+                        <td>
+                          <div>{l.label}</div>
+                          <div className="dim xs mono">{l.key}</div>
+                        </td>
+                        <td className="nowrap"><Badge>{KIND_LABEL[l.kind]}</Badge></td>
+                        <td className="nowrap">{TARGET_LABEL[l.targetService]}</td>
+                        <td className="truncate mono small" style={{ maxWidth: 260 }} title={l.destPath}>{l.destPath}</td>
+                        <td className="truncate mono small" style={{ maxWidth: 220 }} title={l.stagingPath}>{l.stagingPath}</td>
+                        <td className="nowrap">{l.rescan ? "Yes" : "No"}</td>
+                        <td className="shrink">
+                          <Button size="sm" variant="ghost" icon="settings" title="Edit" aria-label={`Edit ${l.label}`} onClick={() => startEdit(l)} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </TableWrap>
+            )
+          )}
+        </Async>
+      </Card>
 
-      <div className="card">
-        <h2>Add / update</h2>
-        <label>Key (a-z0-9-)</label>
-        <input value={form.key} onChange={(e) => set("key", e.target.value)} placeholder="kavita-manga" />
-        <label>Label</label>
-        <input value={form.label} onChange={(e) => set("label", e.target.value)} placeholder="Kavita Manga" />
-        <div className="flex">
-          <div style={{ flex: 1 }}>
-            <label>Content kind</label>
-            <select value={form.kind} onChange={(e) => set("kind", e.target.value)}>
-              {["books", "manga", "comics", "music"].map((k) => <option key={k}>{k}</option>)}
-            </select>
+      <Card
+        title={editing ? `Edit ${form.label || form.key}` : "Add a library"}
+        subtitle={approvedRoots.length > 0 ? `Destination and staging paths must live inside: ${approvedRoots.join(", ")}` : undefined}
+        icon="plus"
+        actions={editing && <Button size="sm" variant="ghost" onClick={startNew}>Add a different one</Button>}
+      >
+        {save.error && <Alert tone="err" title="Save failed">{save.error}</Alert>}
+        {save.data && !save.error && <Alert tone="ok" title="Saved">{form.label} is ready for manual intake.</Alert>}
+
+        <form className="stack" onSubmit={submit}>
+          <div className="grid-2">
+            <TextField
+              label="Key"
+              value={form.key}
+              onChange={(e) => set("key", e.target.value)}
+              disabled={editing}
+              pattern="[a-z0-9-]+"
+              placeholder="kavita-manga"
+              hint="Lowercase letters, digits and hyphens — the stable id intake refers to. Can't be changed once created."
+              required
+            />
+            <TextField
+              label="Label"
+              value={form.label}
+              onChange={(e) => set("label", e.target.value)}
+              placeholder="Kavita — Manga"
+              required
+            />
           </div>
-          <div style={{ flex: 1 }}>
-            <label>Target service</label>
-            <select value={form.targetService} onChange={(e) => set("targetService", e.target.value)}>
-              {["kavita", "navidrome"].map((k) => <option key={k}>{k}</option>)}
-            </select>
+
+          <SelectField
+            label="Content kind"
+            value={form.kind}
+            onChange={(e) => set("kind", e.target.value as LibraryKind)}
+            hint={`Routes to ${TARGET_LABEL[target]} — Kavita serves books/manga/comics, Navidrome serves music.`}
+          >
+            {(Object.keys(KIND_LABEL) as LibraryKind[]).map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}
+          </SelectField>
+
+          <TextField
+            label="Destination path"
+            value={form.destPath}
+            onChange={(e) => set("destPath", e.target.value)}
+            placeholder="/srv/torhq/libraries/manga"
+            hint={`Final directory ${TARGET_LABEL[target]} scans. Doesn't need to exist yet.`}
+            required
+          />
+          <TextField
+            label="Staging path"
+            value={form.stagingPath}
+            onChange={(e) => set("stagingPath", e.target.value)}
+            placeholder="/srv/torhq/staging/manga"
+            hint="Working directory intake copies into before the atomic move to the destination."
+            required
+          />
+
+          <Checkbox
+            label={`Ask ${TARGET_LABEL[target]} to rescan after each import`}
+            checked={form.rescan}
+            onChange={(v) => set("rescan", v)}
+          />
+
+          <div className="row">
+            <Button type="submit" variant="primary" icon={editing ? "check" : "plus"} pending={save.pending} disabled={!canSave}>
+              {editing ? "Save changes" : "Add library"}
+            </Button>
           </div>
-        </div>
-        <label>Destination path (final library dir)</label>
-        <input value={form.destPath} onChange={(e) => set("destPath", e.target.value)} placeholder="/srv/torhq/libraries/manga" />
-        <label>Staging path</label>
-        <input value={form.stagingPath} onChange={(e) => set("stagingPath", e.target.value)} placeholder="/srv/torhq/staging/manga" />
-        <div className="flex" style={{ marginTop: 14 }}>
-          <button className="btn primary" onClick={save}>Save</button>
-          {msg && <span className={"small " + (msg === "Saved." ? "ok-text" : "err-text")}>{msg}</span>}
-        </div>
-      </div>
-    </div>
+        </form>
+      </Card>
+    </>
   );
 }
