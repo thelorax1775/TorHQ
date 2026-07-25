@@ -1,37 +1,79 @@
-import { useState } from "react";
-import { api, setCsrf } from "../lib/api.js";
+/**
+ * Sign-in / first-run admin creation. Rendered in place of the whole app, so
+ * the requested URL is preserved and the user lands back on it after signing in.
+ */
+import { useState, type FormEvent } from "react";
+import { apiSend, setCsrf } from "../lib/api.js";
+import { useMutation } from "../lib/useMutation.js";
+import { Alert, Button, Card, Field } from "../components/ui.js";
+import { Icon } from "../components/Icon.js";
 
-export function Login({ needsSetup, onDone }: { needsSetup: boolean; onDone: () => void }) {
-  const [username, setU] = useState("");
-  const [password, setP] = useState("");
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+export function Login({ needsSetup, onDone }: { needsSetup: boolean; onDone: () => void | Promise<void> }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
 
-  async function submit(e: React.FormEvent) {
+  const submit = useMutation(async () => {
+    const path = needsSetup ? "/api/auth/register" : "/api/auth/login";
+    const r = await apiSend<{ csrfToken: string }>(path, "POST", { username, password });
+    setCsrf(r.csrfToken);
+    return r;
+  });
+
+  async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    setBusy(true); setErr(null);
-    try {
-      const path = needsSetup ? "/api/auth/register" : "/api/auth/login";
-      const r = await api<{ csrfToken: string }>(path, { method: "POST", body: JSON.stringify({ username, password }) });
-      setCsrf(r.csrfToken);
-      onDone();
-    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+    const r = await submit.run();
+    if (r.ok) await onDone();
   }
 
+  const tooShort = needsSetup && password.length > 0 && password.length < 8;
+
   return (
-    <div className="center">
-      <form className="card login" onSubmit={submit}>
-        <div className="brand">Tor<span>HQ</span></div>
-        <h2>{needsSetup ? "Create admin account" : "Sign in"}</h2>
-        <label>Username</label>
-        <input value={username} onChange={(e) => setU(e.target.value)} autoFocus />
-        <label>Password</label>
-        <input type="password" value={password} onChange={(e) => setP(e.target.value)} />
-        {err && <p className="err-text small">{err}</p>}
-        <div style={{ marginTop: 14 }}>
-          <button className="btn primary" disabled={busy}>{needsSetup ? "Create & continue" : "Sign in"}</button>
-        </div>
-        {needsSetup && <p className="muted small" style={{ marginTop: 10 }}>Password must be at least 8 characters.</p>}
+    <div className="auth-screen">
+      <form className="auth-card" onSubmit={onSubmit}>
+        <Card>
+          <div className="brand" style={{ padding: 0, marginBottom: "var(--s5)" }}>
+            <span className="mark"><Icon name="download" size={16} /></span>
+            <span>Tor<em>HQ</em></span>
+          </div>
+          <h3 style={{ marginBottom: "var(--s4)" }}>{needsSetup ? "Create the admin account" : "Sign in"}</h3>
+
+          <Field label="Username">
+            <input
+              className="input"
+              value={username}
+              autoFocus
+              autoComplete="username"
+              onChange={(e) => setUsername(e.target.value)}
+            />
+          </Field>
+          <Field
+            label="Password"
+            hint={needsSetup ? "At least 8 characters. This is the only account TorHQ creates." : undefined}
+            error={tooShort ? "Password must be at least 8 characters." : undefined}
+          >
+            <input
+              className="input"
+              type="password"
+              value={password}
+              autoComplete={needsSetup ? "new-password" : "current-password"}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </Field>
+
+          {submit.error && <div className="mt-3"><Alert tone="err" title="Sign-in failed">{submit.error}</Alert></div>}
+
+          <div className="mt-4">
+            <Button
+              type="submit"
+              variant="primary"
+              className="btn-block"
+              pending={submit.pending}
+              disabled={!username || !password || tooShort}
+            >
+              {needsSetup ? "Create account & continue" : "Sign in"}
+            </Button>
+          </div>
+        </Card>
       </form>
     </div>
   );
