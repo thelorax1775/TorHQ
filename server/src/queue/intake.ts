@@ -156,20 +156,23 @@ async function linkTree(src: string, dest: string): Promise<void> {
  * staging tree and an errno. Translate the ones with a real cause into the
  * action that fixes them; anything else propagates unchanged.
  */
-function explainLinkFailure(err: unknown, source: string, destPath: string): Error {
+function explainLinkFailure(err: unknown, source: string, stagingBase: string): Error {
   const code = (err as NodeJS.ErrnoException)?.code;
   if (code === "EXDEV") {
+    // The links are built in staging, not at the destination, so this is the
+    // source/staging pair that differs — naming the destination here would send
+    // someone to move the wrong directory.
     return new Error(
-      `Cannot hardlink ${source} into ${destPath}: they are on different filesystems. ` +
-      `A hardlink import requires the source and the library to live on one filesystem. ` +
-      `Either move the library's destination onto the source's filesystem, or switch ` +
-      `this library to move mode — but note that move mode deletes the source.`,
+      `Cannot hardlink ${source} into ${stagingBase}: they are on different filesystems. ` +
+      `A hardlink import requires the source, the staging directory and the library to ` +
+      `live on one filesystem. Either put them on the same one, or switch this library ` +
+      `to move mode — but note that move mode deletes the source.`,
     );
   }
   if (code === "EPERM" || code === "EACCES") {
     return new Error(
-      `Cannot hardlink ${source} into ${destPath}: permission denied. Hardlinking needs ` +
-      `write access to the destination directory and read access to the source; some ` +
+      `Cannot hardlink ${source} into ${stagingBase}: permission denied. Hardlinking needs ` +
+      `write access to the staging directory and read access to the source; some ` +
       `filesystems (and NFS exports without the right options) refuse links outright.`,
     );
   }
@@ -245,7 +248,7 @@ export async function runIntake(
       try {
         await linkTree(source, staged);
       } catch (err) {
-        throw explainLinkFailure(err, source, destPath);
+        throw explainLinkFailure(err, source, stagingBase);
       }
     } else {
       // Copy (not move) so the source survives until the atomic commit succeeds,

@@ -21,6 +21,20 @@ import { webhookRoutes } from "./routes/webhooks.js";
 import { systemRoutes } from "./routes/system.js";
 import { openApiRoutes } from "./routes/openapi.js";
 
+/**
+ * Turn a validation failure into one line a person can act on: which field, and
+ * what was wrong with it. Bounded, because a bad request can carry many issues
+ * and the message ends up in a toast.
+ */
+function describeIssues(err: ZodError): string {
+  const parts = err.issues.slice(0, 3).map((i) => {
+    const field = i.path.join(".");
+    return field ? `${field}: ${i.message.toLowerCase()}` : i.message.toLowerCase();
+  });
+  const more = err.issues.length - parts.length;
+  return `validation failed — ${parts.join("; ")}${more > 0 ? ` (and ${more} more)` : ""}`;
+}
+
 export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   const app = Fastify({
     logger: loggerOptions(ctx.env.TORHQ_LOG_LEVEL),
@@ -31,7 +45,10 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   // Uniform error shape; hide internals, surface validation messages.
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ZodError) {
-      return reply.code(400).send({ error: "validation failed", issues: err.issues });
+      // Name the fields. "validation failed" on its own sends the user hunting
+      // through a form of a dozen inputs for the one the server rejected, and
+      // the UI only surfaces `error` — `issues` alone never reaches them.
+      return reply.code(400).send({ error: describeIssues(err), issues: err.issues });
     }
     const status = (err as any).statusCode ?? 500;
     if (status >= 500) app.log.error(err);

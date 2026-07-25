@@ -35,17 +35,28 @@ declare global {
  * id, and there is no supported way to swap the id afterwards. Both facts are
  * tracked here rather than in component state, which resets on every mount.
  */
+const GNAME = "torhq-web";
 let loadPromise: Promise<void> | null = null;
 let loadedCx: string | null = null;
+/**
+ * The rendered widget, kept across mounts and moved between hosts.
+ *
+ * Google's API has no counterpart to `render()`, so an element created per mount
+ * is an element that lives forever: every visit to this page would leave another
+ * behind. Rendering once into a container we own and re-parenting it means one
+ * element for the life of the tab, however often the page is navigated away
+ * from and back.
+ */
+let container: HTMLDivElement | null = null;
 
 function loadCse(cx: string): Promise<void> {
   if (loadPromise) return loadPromise;
   loadedCx = cx;
+  const script = document.createElement("script");
   loadPromise = new Promise<void>((resolve, reject) => {
     // Explicit parse mode: nothing renders until we ask, so the widget cannot
     // appear before the card that is supposed to contain it.
     window.__gcse = { parsetags: "explicit", callback: resolve };
-    const script = document.createElement("script");
     script.async = true;
     script.src = `https://cse.google.com/cse.js?cx=${encodeURIComponent(cx)}`;
     script.onerror = () => reject(new Error(
@@ -53,15 +64,21 @@ function loadCse(cx: string): Promise<void> {
       "and whether an ad blocker or DNS filter is blocking it.",
     ));
     document.head.appendChild(script);
+  }).catch((err: unknown) => {
+    // Do not cache the failure. A blocked or offline first load would otherwise
+    // stick for the life of the tab, so returning to the page would keep
+    // reporting the widget broken long after the network came back. Drop the
+    // dead <script> too, so the retry is a fresh load rather than a no-op.
+    loadPromise = null;
+    loadedCx = null;
+    script.remove();
+    throw err;
   });
   return loadPromise;
 }
 
 export function GoogleSearchWidget({ cx, query }: { cx: string; query: string }) {
   const host = useRef<HTMLDivElement>(null);
-  // A fresh name per mount. Re-rendering into a new div under an old name leaves
-  // the widget writing into the detached node React threw away on unmount.
-  const gname = useRef(`torhq-web-${Math.random().toString(36).slice(2, 10)}`).current;
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -75,24 +92,28 @@ export function GoogleSearchWidget({ cx, query }: { cx: string; query: string })
         if (cancelled || !host.current) return;
         const cse = window.google?.search?.cse?.element;
         if (!cse) throw new Error("Google's search widget loaded but did not initialise.");
-        cse.render({
-          div: host.current,
-          tag: "searchresults-only",
-          gname,
-          // TorHQ owns the URL: letting the widget push its own history entries
-          // would make Back step through Google's state instead of the app's.
-          attributes: { enableHistory: "false" },
-        });
+        if (!container) {
+          container = document.createElement("div");
+          cse.render({
+            div: container,
+            tag: "searchresults-only",
+            gname: GNAME,
+            // TorHQ owns the URL: letting the widget push its own history entries
+            // would make Back step through Google's state instead of the app's.
+            attributes: { enableHistory: "false" },
+          });
+        }
+        host.current.appendChild(container);
         setReady(true);
       })
       .catch((e: unknown) => { if (!cancelled) setError((e as Error).message); });
     return () => { cancelled = true; };
-  }, [cx, gname, wrongCx]);
+  }, [cx, wrongCx]);
 
   useEffect(() => {
     if (!ready || !query.trim()) return;
-    window.google?.search?.cse?.element?.getElement(gname)?.execute(query);
-  }, [ready, query, gname]);
+    window.google?.search?.cse?.element?.getElement(GNAME)?.execute(query);
+  }, [ready, query]);
 
   if (wrongCx) {
     return (

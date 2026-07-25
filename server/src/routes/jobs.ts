@@ -6,6 +6,22 @@ import { jobActivity, recentActivity } from "../lib/activity.js";
 import { PathValidationError } from "../security/paths.js";
 import type { AppContext } from "../lib/context.js";
 
+/** Job statuses the queue actually uses; anything else is a typo, not a filter. */
+const JOB_STATUSES = ["queued", "running", "completed", "failed", "dead"] as const;
+
+const JobListQuery = z.object({
+  status: z.enum(JOB_STATUSES).optional(),
+});
+
+const ActivityQuery = z.object({
+  // Coerced and clamped rather than trusted: SQLite reads a negative LIMIT as
+  // "no limit", so `?limit=-1` would return the entire activity table, and a
+  // non-numeric value would reach the driver as NaN and throw.
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+});
+
+const IdParam = z.object({ id: z.string().min(1).max(64) });
+
 const IntakeInput = z.object({
   libraryKey: z.string().min(1),
   sourcePath: z.string().min(1),
@@ -47,19 +63,19 @@ export function jobRoutes(app: FastifyInstance, ctx: AppContext): void {
   });
 
   app.get("/api/jobs", { preHandler: app.requireAuth }, async (req) => {
-    const status = (req.query as any)?.status as string | undefined;
+    const { status } = JobListQuery.parse(req.query ?? {});
     return { jobs: listJobs(status) };
   });
 
   app.get("/api/jobs/:id", { preHandler: app.requireAuth }, async (req, reply) => {
-    const id = (req.params as any).id as string;
+    const { id } = IdParam.parse(req.params);
     const job = getJob(id);
     if (!job) return reply.code(404).send({ error: "not found" });
     return { job, activity: jobActivity(id) };
   });
 
   app.post("/api/jobs/:id/retry", guard, async (req, reply) => {
-    const id = (req.params as any).id as string;
+    const { id } = IdParam.parse(req.params);
     const job = retryJob(id);
     if (!job) return reply.code(404).send({ error: "not found" });
     return { ok: true, job };
@@ -67,7 +83,7 @@ export function jobRoutes(app: FastifyInstance, ctx: AppContext): void {
 
   // Global activity timeline.
   app.get("/api/activity", { preHandler: app.requireAuth }, async (req) => {
-    const limit = Number((req.query as any)?.limit ?? 100);
-    return { activity: recentActivity(Math.min(limit, 500)) };
+    const { limit } = ActivityQuery.parse(req.query ?? {});
+    return { activity: recentActivity(limit) };
   });
 }

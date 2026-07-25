@@ -14,6 +14,12 @@ import { jobs } from "../server/src/db/schema.js";
 import { previewIntake, runIntake } from "../server/src/queue/intake.js";
 import { enqueue, Worker, getJob } from "../server/src/queue/queue.js";
 import { PathValidationError } from "../server/src/security/paths.js";
+import { execFileSync } from "node:child_process";
+
+/** node has no mkfifo; the point is a directory entry that is not a regular file. */
+function mkfifoSync(path: string): void {
+  execFileSync("mkfifo", [path]);
+}
 
 let root: string;
 let dataDir: string;
@@ -178,6 +184,43 @@ describe("hardlink import mode", () => {
     const res = await runIntake("job-twice-2", { libraryKey: "kavita-seeded", sourcePath: src }, [root], masterKey);
     expect(res.alreadyImported).toBe(true);
     expect(existsSync(src)).toBe(true);
+  });
+
+  it("links a single-file source, not just a directory", async () => {
+    const src = libDir("downloads", "Single.cbz");
+    writeFileSync(src, "one chapter");
+    await runIntake("job-single", { libraryKey: "kavita-seeded", sourcePath: src }, [root], masterKey);
+    const dest = libDir("libraries", "seeded", "Single.cbz");
+    expect(statSync(dest).ino).toBe(statSync(src).ino);
+    expect(existsSync(src)).toBe(true);
+  });
+
+  it("reproduces a nested directory tree rather than flattening it", async () => {
+    const src = libDir("downloads", "Nested Series");
+    mkdirSync(join(src, "Vol 1", "extras"), { recursive: true });
+    writeFileSync(join(src, "Vol 1", "ch1.cbz"), "a");
+    writeFileSync(join(src, "Vol 1", "extras", "cover.jpg"), "b");
+    await runIntake("job-nested", { libraryKey: "kavita-seeded", sourcePath: src }, [root], masterKey);
+
+    const dest = libDir("libraries", "seeded", "Nested Series");
+    expect(readdirSync(join(dest, "Vol 1")).sort()).toEqual(["ch1.cbz", "extras"]);
+    expect(statSync(join(dest, "Vol 1", "extras", "cover.jpg")).ino)
+      .toBe(statSync(join(src, "Vol 1", "extras", "cover.jpg")).ino);
+  });
+
+  it("leaves no staging remnant when the link step fails", async () => {
+    // A source containing something that cannot be hardlinked: the import must
+    // fail, and it must not leave a half-built tree behind for the next attempt.
+    const src = libDir("downloads", "Broken Series");
+    mkdirSync(src, { recursive: true });
+    writeFileSync(join(src, "ok.cbz"), "fine");
+    mkfifoSync(join(src, "pipe"));
+
+    await expect(runIntake("job-broken", { libraryKey: "kavita-seeded", sourcePath: src }, [root], masterKey))
+      .rejects.toThrow(/not a regular file/);
+    expect(readdirSync(libDir("staging", "seeded"))).toEqual([]);
+    expect(existsSync(libDir("libraries", "seeded", "Broken Series"))).toBe(false);
+    expect(existsSync(src)).toBe(true); // and the source is untouched
   });
 
   it("warns about deletion only for a library that actually deletes", async () => {

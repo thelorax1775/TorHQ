@@ -583,10 +583,17 @@ export const openApiDoc = {
     "/api/jobs": {
       get: {
         summary: "List jobs",
-        parameters: [{ name: "status", in: "query", schema: { type: "string" } }],
-        responses: { "200": { description: "OK", content: { "application/json": { schema: { type: "object", properties: {
-          jobs: { type: "array", items: { $ref: "#/components/schemas/Job" } },
-        } } } } } },
+        parameters: [{
+          name: "status", in: "query",
+          schema: { type: "string", enum: ["queued", "running", "completed", "failed", "dead"] },
+          description: "An unknown status is rejected, not treated as a filter that matches nothing.",
+        }],
+        responses: {
+          "200": { description: "OK", content: { "application/json": { schema: { type: "object", properties: {
+            jobs: { type: "array", items: { $ref: "#/components/schemas/Job" } },
+          } } } } },
+          "400": errorResponse("unknown status"),
+        },
       },
     },
     "/api/jobs/{id}": {
@@ -604,7 +611,17 @@ export const openApiDoc = {
         responses: { "200": jsonOk("Ok"), "404": errorResponse("not found") },
       },
     },
-    "/api/activity": { get: { summary: "Global activity timeline", responses: { "200": { description: "OK" } } } },
+    "/api/activity": {
+      get: {
+        summary: "Global activity timeline",
+        parameters: [{
+          name: "limit", in: "query", required: false,
+          schema: { type: "integer", minimum: 1, maximum: 500, default: 100 },
+          description: "Rejected outside 1-500 rather than clamped, so a caller is never quietly given something other than what it asked for.",
+        }],
+        responses: { "200": { description: "OK" }, "400": errorResponse("limit out of range or not a number") },
+      },
+    },
     "/api/downloads": {
       get: {
         summary: "Every torrent in qBittorrent, with the global transfer rates and category map",

@@ -214,3 +214,39 @@ describe("removing a library", () => {
     expect(r.statusCode).toBeGreaterThanOrEqual(400);
   });
 });
+
+describe("query parameters that reach the database", () => {
+  let cookie = "";
+  beforeAll(async () => {
+    const r = await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "admin", password: "supersecret1" } });
+    cookie = r.cookies[0].name + "=" + r.cookies[0].value;
+  });
+
+  // Regression: `limit` went to Drizzle unchecked. SQLite reads a negative
+  // LIMIT as "no limit", so this returned the whole activity table, and a
+  // non-numeric value reached the driver as NaN and threw.
+  it.each(["-1", "0", "abc", "", "99999"])("rejects ?limit=%s instead of running it", async (limit) => {
+    const r = await app.inject({ method: "GET", url: `/api/activity?limit=${limit}`, headers: { cookie } });
+    expect(r.statusCode).toBe(400);
+  });
+
+  it("accepts a sane limit and defaults when absent", async () => {
+    for (const url of ["/api/activity", "/api/activity?limit=25"]) {
+      const r = await app.inject({ method: "GET", url, headers: { cookie } });
+      expect(r.statusCode, url).toBe(200);
+      expect(Array.isArray(r.json().activity)).toBe(true);
+    }
+  });
+
+  it("rejects an unknown job status rather than silently returning nothing", async () => {
+    const bad = await app.inject({ method: "GET", url: "/api/jobs?status=nonsense", headers: { cookie } });
+    expect(bad.statusCode).toBe(400);
+    const good = await app.inject({ method: "GET", url: "/api/jobs?status=queued", headers: { cookie } });
+    expect(good.statusCode).toBe(200);
+  });
+
+  it("names the offending field in a validation error", async () => {
+    const r = await app.inject({ method: "GET", url: "/api/activity?limit=-1", headers: { cookie } });
+    expect(r.json().error).toContain("limit");
+  });
+});
