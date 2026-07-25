@@ -63,6 +63,14 @@ export interface ArrQueueItem {
   added?: string;
 }
 
+/** A download-client path as the *arr sees it vs. as the client reports it. */
+export interface RemotePathMapping {
+  id: number;
+  host: string;
+  remotePath: string;
+  localPath: string;
+}
+
 /** A download client as configured inside an *arr. */
 export interface ArrDownloadClient {
   id: number;
@@ -198,6 +206,28 @@ export class ArrAdapter implements ServiceAdapter {
   /** Download-handling config — notably `enableCompletedDownloadHandling`. */
   async downloadClientConfig(): Promise<{ enableCompletedDownloadHandling?: boolean; autoRedownloadFailed?: boolean }> {
     return httpJson(this.cfg.baseUrl, this.api("config/downloadclient"), { headers: this.hdr() });
+  }
+
+  /** Path translations between the download client's view and the *arr's own. */
+  async remotePathMappings(): Promise<RemotePathMapping[]> {
+    const res = await httpJson<any[]>(this.cfg.baseUrl, this.api("remotepathmapping"), { headers: this.hdr() });
+    return (Array.isArray(res) ? res : []).map((m) => ({
+      id: m.id, host: m.host ?? "", remotePath: m.remotePath ?? "", localPath: m.localPath ?? "",
+    }));
+  }
+
+  /**
+   * Directories the *arr can see inside `path`, through its OWN filesystem. This
+   * is the only way to ask "is the download directory actually mounted in your
+   * container?" — a question no amount of configuration inspection answers, and
+   * the usual reason a correctly-configured stack still never imports anything.
+   */
+  async listFolders(path: string): Promise<string[]> {
+    const res = await httpJson<{ directories?: Array<{ path?: string }> }>(
+      this.cfg.baseUrl, this.api("filesystem"),
+      { headers: this.hdr(), query: { path, allowFoldersWithoutTrailingSlashes: true, includeFiles: false } },
+    );
+    return (res.directories ?? []).map((d) => d.path ?? "").filter(Boolean);
   }
 
   private lookupPath(): string { return this.api(`${RESOURCE[this.kind]}/lookup`); }
