@@ -28,10 +28,11 @@ export function pipelineRoutes(app: FastifyInstance, ctx: AppContext): void {
 
   // Read-only end-to-end verification of the grab → download → import path.
   app.get("/api/pipeline/check", { preHandler: app.requireAuth }, async () => {
-    const [qb, arrs] = await Promise.all([
-      qbSnapshot(getAdapter("qbittorrent", ctx.masterKey) as QbittorrentAdapter | null),
-      Promise.all(ARR_SERVICES.map((s) => arrSnapshot(s, arrAdapter(s)))),
-    ]);
+    // qBittorrent first: its save paths are what each *arr is then asked to look
+    // for, which is the one check that needs both sides of the pipeline at once.
+    const qb = await qbSnapshot(getAdapter("qbittorrent", ctx.masterKey) as QbittorrentAdapter | null);
+    const savePaths = downloadPaths(qb);
+    const arrs = await Promise.all(ARR_SERVICES.map((s) => arrSnapshot(s, arrAdapter(s), savePaths)));
     return { checks: buildPipelineChecks({ qb, arrs }) };
   });
 
@@ -106,7 +107,9 @@ async function qbSnapshot(qb: QbittorrentAdapter | null): Promise<QbSnapshot> {
  * a single permission-denied call degrades one check instead of the service; if
  * nothing answered at all, the *arr itself is down.
  */
-async function arrSnapshot(service: ArrFlavor, arr: ArrAdapter | null): Promise<ArrSnapshot> {
+async function arrSnapshot(
+  service: ArrFlavor, arr: ArrAdapter | null, savePaths: string[],
+): Promise<ArrSnapshot> {
   if (!arr) return { service, configured: false };
   const results = await Promise.allSettled([
     arr.downloadClients(), arr.downloadClientConfig(), arr.rootFolders(), arr.queue(),
@@ -122,7 +125,40 @@ async function arrSnapshot(service: ArrFlavor, arr: ArrAdapter | null): Promise<
     config: config.status === "fulfilled" ? config.value : undefined,
     rootFolders: roots.status === "fulfilled" ? roots.value : undefined,
     queue: queue.status === "fulfilled" ? queue.value : undefined,
+    visiblePaths: await probeVisibility(arr, savePaths),
   };
+}
+
+/** Every distinct directory qBittorrent writes into, deepest duplicates removed. */
+function downloadPaths(qb: QbSnapshot): string[] {
+  const paths = Object.values(qb.categories ?? {}).map((c) => c.savePath);
+  if (qb.defaultSavePath) paths.push(qb.defaultSavePath);
+  return [...new Set(paths.filter((p): p is string => typeof p === "string" && p.trim().length > 0))];
+}
+
+/**
+ * Ask the *arr to browse each save path's parent and report whether the path is
+ * there. Listing the parent rather than the path itself is deliberate: an empty
+ * directory and a directory that does not exist both list as empty, so only the
+ * parent's children distinguish "mounted but idle" from "not mounted at all".
+ * A browse call that throws means we could not determine visibility, which is
+ * reported as unknown (undefined) rather than as a failure.
+ */
+async function probeVisibility(
+  arr: ArrAdapter, savePaths: string[],
+): Promise<Array<{ path: string; visible: boolean }> | undefined> {
+  if (savePaths.length === 0) return [];
+  try {
+    return await Promise.all(savePaths.map(async (path) => {
+      const trimmed = path.replace(/\/+$/, "");
+      const parent = trimmed.slice(0, trimmed.lastIndexOf("/")) || "/";
+      const children = await arr.listFolders(parent);
+      const wanted = trimmed.toLowerCase();
+      return { path, visible: children.some((c) => c.replace(/\/+$/, "").toLowerCase() === wanted) };
+    }));
+  } catch {
+    return undefined;
+  }
 }
 
 function reason(err: unknown): string {

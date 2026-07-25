@@ -37,6 +37,11 @@ export interface ArrSnapshot {
   config?: { enableCompletedDownloadHandling?: boolean };
   rootFolders?: Array<{ id: number; path: string; accessible?: boolean }>;
   queue?: ArrQueueItem[];
+  /**
+   * For each directory qBittorrent saves into: can this *arr actually see it
+   * through its own filesystem? Undefined when TorHQ could not ask.
+   */
+  visiblePaths?: Array<{ path: string; visible: boolean }>;
 }
 
 /** How long an item may sit in import limbo before it counts as stuck. */
@@ -109,6 +114,7 @@ function arrChecks(arr: ArrSnapshot, qb: QbSnapshot, now: number): PipelineCheck
   checks.push(categoryCheck(arr, name, qb, client));
   checks.push(completedHandlingCheck(arr, name));
   checks.push(rootFolderCheck(arr, name, qb));
+  checks.push(savePathVisibleCheck(arr, name, qb));
   checks.push(stuckImportCheck(arr, name, qb, now));
   return checks;
 }
@@ -148,10 +154,30 @@ function downloadClientCheck(arr: ArrSnapshot, name: string, client: ArrDownload
   };
 }
 
+/**
+ * Each *arr names the download-client category field after its own media type —
+ * Radarr `movieCategory`, Sonarr `tvCategory`, Lidarr `musicCategory` — and only
+ * some builds also expose a plain `category`. Reading one name finds an empty
+ * string on a correctly-configured stack, so try the flavour's own name first.
+ */
+const CATEGORY_FIELDS: Record<ArrFlavor, string[]> = {
+  radarr: ["movieCategory", "category"],
+  sonarr: ["tvCategory", "category"],
+  lidarr: ["musicCategory", "category"],
+};
+
+function clientCategory(service: ArrFlavor, client: ArrDownloadClient | undefined): string {
+  for (const field of CATEGORY_FIELDS[service]) {
+    const value = client?.fields[field];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
 function categoryCheck(
   arr: ArrSnapshot, name: string, qb: QbSnapshot, client: ArrDownloadClient | undefined,
 ): PipelineCheck {
-  const category = typeof client?.fields.category === "string" ? client.fields.category.trim() : "";
+  const category = clientCategory(arr.service, client);
   const base = {
     id: `qb-category-${arr.service}`,
     label: `qBittorrent has a \`${category || arr.service}\` category`,
@@ -241,6 +267,47 @@ function rootFolderCheck(arr: ArrSnapshot, name: string, qb: QbSnapshot): Pipeli
   return {
     ...base, ok: true, severity: "info",
     detail: `${arr.rootFolders.map((f) => f.path).join(", ")} — accessible and outside the download directory.`,
+  };
+}
+
+/**
+ * The failure no amount of configuration inspection catches: every setting is
+ * right, both sides agree on the path string, and the *arr still never imports —
+ * because the download directory was never mounted into its container, so the
+ * path it is being handed does not exist in its filesystem at all. This asks the
+ * *arr directly, through its own file browser.
+ */
+function savePathVisibleCheck(arr: ArrSnapshot, name: string, qb: QbSnapshot): PipelineCheck {
+  const base = { id: `${arr.service}-sees-save-path`, label: `${name} can see qBittorrent's download directory` };
+  const savePaths = qbSavePaths(qb);
+  if (savePaths.length === 0) {
+    return {
+      ...base, ok: false, severity: "info",
+      detail: "No qBittorrent save path is known yet, so there is nothing to look for.",
+      fix: "Configure qBittorrent and its categories first.",
+    };
+  }
+  if (arr.visiblePaths === undefined) {
+    return {
+      ...base, ok: false, severity: "warn",
+      detail: `TorHQ could not ask ${name} to browse its own filesystem.`,
+      fix: `Confirm the API key stored for ${name} has full access.`,
+    };
+  }
+  const missing = arr.visiblePaths.filter((v) => !v.visible);
+  if (missing.length) {
+    return {
+      ...base, ok: false, severity: "error",
+      detail: `${name} cannot see ${missing.map((v) => v.path).join(", ")}. `
+        + "Downloads will complete in qBittorrent and then sit there forever, with no error in either app.",
+      fix: `Mount that directory into ${name}'s container at the same path qBittorrent uses. `
+        + "On Proxmox: `pct set <ctid> -mpN /host/path,mp=/same/path/qbittorrent/uses`, then reboot the container. "
+        + "Keeping the path identical also avoids a remote path mapping, and lets imports hardlink instead of copy.",
+    };
+  }
+  return {
+    ...base, ok: true, severity: "info",
+    detail: `${name} can browse ${arr.visiblePaths.map((v) => v.path).join(", ")}.`,
   };
 }
 
