@@ -390,6 +390,21 @@ export const openApiDoc = {
         responses: { "200": jsonOk("Ok"), "400": errorResponse("path escapes approved roots / validation") },
       },
     },
+    "/api/libraries/{key}": {
+      delete: {
+        summary: "Forget a destination library",
+        description:
+          "Removes the definition only — nothing on disk is touched. Refused while intake jobs are " +
+          "still queued or running against it, so the failure surfaces here rather than at import time.",
+        security: [{ cookieAuth: [], csrfToken: [] }],
+        parameters: [csrfHeader, { name: "key", in: "path", required: true, schema: { type: "string", pattern: "^[a-z0-9-]+$" } }],
+        responses: {
+          "200": jsonOk("Ok", "Removed"),
+          "404": errorResponse("no library with that key"),
+          "409": errorResponse("intake jobs are still queued against it"),
+        },
+      },
+    },
     "/api/config/roots": { get: { summary: "Approved roots (read-only)", responses: { "200": { description: "OK" } } } },
     "/api/requests/{route}/options": {
       get: {

@@ -17,10 +17,18 @@ export function setUnauthorizedHandler(fn: (() => void) | null) { onUnauthorized
 /** An HTTP failure that keeps its status so callers can react to 409/404/502. */
 export class ApiError extends Error {
   readonly status: number;
-  constructor(message: string, status: number) {
+  /**
+   * The parsed response body, when there was one. Some routes answer a failure
+   * with a structured result rather than an `{ error }` — a connection test that
+   * reports *why* it failed is still a successful test, and collapsing it into
+   * "HTTP 502" would throw away the only useful part.
+   */
+  readonly body: unknown;
+  constructor(message: string, status: number, body: unknown = null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.body = body;
   }
 }
 
@@ -52,7 +60,7 @@ export async function api<T = unknown>(path: string, opts: RequestInit = {}): Pr
   if (!res.ok) {
     const message = (data as { error?: string } | null)?.error ?? `HTTP ${res.status}`;
     if (res.status === 401) onUnauthorized?.();
-    throw new ApiError(message, res.status);
+    throw new ApiError(message, res.status, data);
   }
   return data as T;
 }

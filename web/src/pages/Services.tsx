@@ -19,7 +19,7 @@
  * field is blank) and is always a separate action from "Save".
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { apiSend, getCsrf } from "../lib/api.js";
+import { apiSend, toApiError } from "../lib/api.js";
 import { useMutation } from "../lib/useMutation.js";
 import { usePolled } from "../lib/usePolled.js";
 import {
@@ -130,21 +130,19 @@ const strVal = (v: unknown): string => (v == null ? "" : String(v));
  * specific failure (wrong port, 401, timeout) into a bare "HTTP 502". This
  * bypasses that one wrapper while still attaching the CSRF header by hand.
  */
+/**
+ * A failed connection test is a successful *test* — the server answers 502 with
+ * the same `HealthResult` body, and that body carries the only useful part
+ * (wrong port, 401, timeout). So the error is unwrapped rather than surfaced.
+ */
 async function testService(body: ServiceInput): Promise<HealthResult> {
-  const headers: Record<string, string> = { "content-type": "application/json" };
-  const csrf = getCsrf();
-  if (csrf) headers["x-csrf-token"] = csrf;
-  let res: Response;
   try {
-    res = await fetch("/api/services/test", { method: "POST", credentials: "same-origin", headers, body: JSON.stringify(body) });
+    return await apiSend<HealthResult>("/api/services/test", "POST", body);
   } catch (e) {
-    throw new Error(e instanceof Error ? e.message : "network request failed");
+    const err = toApiError(e);
+    if (err.body && typeof err.body === "object" && "healthy" in err.body) return err.body as HealthResult;
+    throw err;
   }
-  const text = await res.text();
-  const data: unknown = text ? JSON.parse(text) : null;
-  if (data && typeof data === "object" && "healthy" in data) return data as HealthResult;
-  const message = data && typeof data === "object" && "error" in data ? String((data as { error: unknown }).error) : `HTTP ${res.status}`;
-  throw new Error(message);
 }
 
 export function Services() {

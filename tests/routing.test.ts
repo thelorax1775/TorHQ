@@ -166,3 +166,51 @@ describe("intake path validation via API", () => {
     expect(r.statusCode).toBe(400);
   });
 });
+
+describe("removing a library", () => {
+  let cookie = "", csrf = "";
+  const create = (key: string) => app.inject({
+    method: "POST", url: "/api/libraries", headers: { cookie, "x-csrf-token": csrf },
+    payload: { key, label: key, kind: "books", targetService: "kavita",
+      destPath: join(dataDir, "libraries", "books"), stagingPath: join(dataDir, "staging", "books") },
+  });
+  const list = async () => (await app.inject({ method: "GET", url: "/api/libraries", headers: { cookie } }))
+    .json().libraries.map((l: any) => l.key);
+
+  beforeAll(async () => {
+    const r = await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "admin", password: "supersecret1" } });
+    csrf = r.json().csrfToken;
+    cookie = r.cookies[0].name + "=" + r.cookies[0].value;
+  });
+
+  it("removes a library it knows about", async () => {
+    await create("kavita-scratch");
+    expect(await list()).toContain("kavita-scratch");
+    const r = await app.inject({
+      method: "DELETE", url: "/api/libraries/kavita-scratch", headers: { cookie, "x-csrf-token": csrf },
+    });
+    expect(r.statusCode).toBe(200);
+    expect(await list()).not.toContain("kavita-scratch");
+  });
+
+  it("404s on a library that does not exist", async () => {
+    const r = await app.inject({
+      method: "DELETE", url: "/api/libraries/nosuchlibrary", headers: { cookie, "x-csrf-token": csrf },
+    });
+    expect(r.statusCode).toBe(404);
+  });
+
+  it("refuses without the CSRF header", async () => {
+    await create("kavita-guarded");
+    const r = await app.inject({ method: "DELETE", url: "/api/libraries/kavita-guarded", headers: { cookie } });
+    expect(r.statusCode).toBe(403);
+    expect(await list()).toContain("kavita-guarded");
+  });
+
+  it("refuses a key that is not a valid library key", async () => {
+    const r = await app.inject({
+      method: "DELETE", url: "/api/libraries/..%2F..%2Fetc", headers: { cookie, "x-csrf-token": csrf },
+    });
+    expect(r.statusCode).toBeGreaterThanOrEqual(400);
+  });
+});
