@@ -1,14 +1,40 @@
-import { useEffect, useState } from "react";
-import { api, bytes } from "../lib/api.js";
+/**
+ * Mounts — storage visibility. TorHQ runs unprivileged inside its container
+ * and cannot mount anything itself (see server/src/lib/mounts.ts), so this
+ * page has two read-only views (network shares actually bind-mounted in, and
+ * free space on the approved roots) plus a pure client-side generator for the
+ * host-side command that adds a new share — nothing here calls the server to
+ * change storage, because the server has no such endpoint by design.
+ */
+import { useState } from "react";
+import { usePolled } from "../lib/usePolled.js";
+import { bytes } from "../lib/format.js";
+import {
+  Alert, Async, Button, Card, EmptyState, Field, PageHeader, ProgressBar,
+  RefreshButton, SelectField, StaleNotice, TableWrap, TextField,
+} from "../components/ui.js";
 
 const RAW = "https://raw.githubusercontent.com/thelorax1775/TorHQ/main/scripts/mount-share.sh";
 
-type Mount = { target: string; source: string; fstype: string; totalBytes?: number; freeBytes?: number };
+interface NetworkMount { target: string; source: string; fstype: string; totalBytes?: number; freeBytes?: number }
+interface MountsResponse { mounts: NetworkMount[] }
+interface DiskUsage { path: string; totalBytes: number; freeBytes: number }
+interface StorageResponse { disks: DiskUsage[] }
 
-// TorHQ runs unprivileged and can't mount itself; this page shows what's mounted
-// and generates the exact host command to add a share (run it on the PVE host).
+function usedFraction(total: number, free: number): number {
+  return total > 0 ? (total - free) / total : 0;
+}
+/** Free space rarely needs attention until it's nearly gone. */
+function spaceTone(used: number): "ok" | "warn" | "err" | undefined {
+  if (used >= 0.95) return "err";
+  if (used >= 0.85) return "warn";
+  return undefined;
+}
+
 export function Mounts() {
-  const [mounts, setMounts] = useState<Mount[] | null>(null);
+  const mountsQ = usePolled<MountsResponse>("/api/status/mounts", 30000);
+  const storageQ = usePolled<StorageResponse>("/api/status/storage", 30000);
+
   const [type, setType] = useState<"nfs" | "cifs">("nfs");
   const [remote, setRemote] = useState("");
   const [name, setName] = useState("media");
@@ -18,9 +44,6 @@ export function Mounts() {
   const [ctPath, setCtPath] = useState("");
   const [opts, setOpts] = useState("");
   const [copied, setCopied] = useState(false);
-
-  const load = () => api<{ mounts: Mount[] }>("/api/status/mounts").then((d) => setMounts(d.mounts)).catch(() => setMounts([]));
-  useEffect(() => { load(); }, []);
 
   const q = (v: string) => `'${v.replace(/'/g, "'\\''")}'`;
   function command(): string {
@@ -39,84 +62,154 @@ export function Mounts() {
   }
 
   async function copy() {
-    try { await navigator.clipboard.writeText(command()); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* clipboard blocked */ }
+    try {
+      await navigator.clipboard.writeText(command());
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard blocked (insecure context, permission) — command is still on screen to select manually */
+    }
   }
 
   return (
-    <div>
-      <h1>Mounts</h1>
+    <>
+      <PageHeader
+        title="Mounts"
+        subtitle="Network shares bind-mounted into this container, and how full the approved roots are. TorHQ never mounts anything itself."
+        actions={<RefreshButton q={mountsQ} />}
+      />
 
-      <div className="card">
-        <h2>Mounted network shares</h2>
-        {(!mounts || mounts.length === 0) && (
-          <p className="muted small">No NFS/SMB shares mounted in this container yet. Build a command below and run it on the Proxmox host.</p>
-        )}
-        {mounts?.map((m) => {
-          const cap = typeof m.totalBytes === "number";
-          const pct = cap && m.totalBytes ? (m.totalBytes - m.freeBytes!) / m.totalBytes : 0;
-          return (
-            <div key={m.target} style={{ marginBottom: 10 }}>
-              <div className="flex" style={{ justifyContent: "space-between" }}>
-                <span className="small">{m.target} <span className="muted">· {m.fstype}</span></span>
-                <span className="small muted">{cap ? `${bytes(m.freeBytes!)} free / ${bytes(m.totalBytes!)}` : "unreachable"}</span>
+      <Card title="Approved roots" subtitle="Free space where TorHQ is allowed to read and write." icon="folder">
+        <Async q={storageQ} what="storage usage">
+          {(data) => (
+            data.disks.length === 0 ? (
+              <EmptyState icon="folder" title="No approved roots configured"
+                message="Set TORHQ_APPROVED_ROOTS on the server — see the Settings page." />
+            ) : (
+              <div className="stack-sm">
+                {data.disks.map((d) => {
+                  const used = usedFraction(d.totalBytes, d.freeBytes);
+                  return (
+                    <div key={d.path}>
+                      <div className="spread">
+                        <span className="small mono break">{d.path}</span>
+                        <span className="small muted">{bytes(d.freeBytes)} free of {bytes(d.totalBytes)}</span>
+                      </div>
+                      <ProgressBar value={used} tone={spaceTone(used)} />
+                    </div>
+                  );
+                })}
               </div>
-              <div className="small muted" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.source}</div>
-              {cap && <div className="bar"><span style={{ width: `${Math.round(pct * 100)}%` }} /></div>}
-            </div>
-          );
-        })}
-      </div>
+            )
+          )}
+        </Async>
+      </Card>
 
-      <div className="card">
-        <h2>Add a share</h2>
-        <p className="muted small">
-          TorHQ runs unprivileged and can't mount from inside its container. Fill this in to generate
-          the exact command, then run it on the <strong>Proxmox host</strong> shell. It mounts the share
-          on the host and (if you give a container ID) bind-mounts it into that LXC — e.g. the one running qBittorrent.
-        </p>
+      <Card title="Network shares" subtitle="NFS/SMB mounts visible from inside this container." icon="server">
+        <Async q={mountsQ} what="mounted shares">
+          {(data) => (
+            data.mounts.length === 0 ? (
+              <EmptyState icon="server" title="No network shares mounted"
+                message="Build a command below and run it on the Proxmox host to add one." />
+            ) : (
+              <TableWrap>
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Mountpoint</th>
+                      <th>Source</th>
+                      <th>Type</th>
+                      <th style={{ minWidth: 140 }}>Used</th>
+                      <th className="num">Free</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.mounts.map((m) => {
+                      const cap = typeof m.totalBytes === "number" && typeof m.freeBytes === "number";
+                      const used = cap ? usedFraction(m.totalBytes as number, m.freeBytes as number) : 0;
+                      return (
+                        <tr key={m.target}>
+                          <td className="mono small">{m.target}</td>
+                          <td className="mono small dim break">{m.source}</td>
+                          <td className="nowrap">{m.fstype}</td>
+                          <td>{cap ? <ProgressBar value={used} tone={spaceTone(used)} /> : <span className="dim small">unreachable</span>}</td>
+                          <td className="num">{cap ? bytes(m.freeBytes) : "—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </TableWrap>
+            )
+          )}
+        </Async>
+        <StaleNotice q={mountsQ} />
+      </Card>
 
-        <label>Type</label>
-        <select value={type} onChange={(e) => setType(e.target.value as "nfs" | "cifs")}>
-          <option value="nfs">NFS</option>
-          <option value="cifs">SMB / CIFS</option>
-        </select>
+      <Card
+        title="Add a share"
+        subtitle="Generates the exact command — run it on the Proxmox host shell, not in here."
+        icon="plus"
+      >
+        <Alert tone="info">
+          TorHQ runs unprivileged and can't mount from inside its own container. This fills in a command that
+          mounts the share on the <strong>Proxmox host</strong> and, if you give a container ID, bind-mounts it
+          into that LXC (e.g. the one running qBittorrent).
+        </Alert>
 
-        <label>Remote share {type === "nfs" ? "(server:/export)" : "(//server/share)"}</label>
-        <input value={remote} onChange={(e) => setRemote(e.target.value)}
-          placeholder={type === "nfs" ? "192.168.1.10:/volume1/media" : "//192.168.1.10/media"} />
+        <div className="grid-2 mt-3">
+          <SelectField label="Type" value={type} onChange={(e) => setType(e.target.value as "nfs" | "cifs")}>
+            <option value="nfs">NFS</option>
+            <option value="cifs">SMB / CIFS</option>
+          </SelectField>
+          <TextField
+            label={`Remote share ${type === "nfs" ? "(server:/export)" : "(//server/share)"}`}
+            value={remote}
+            onChange={(e) => setRemote(e.target.value)}
+            placeholder={type === "nfs" ? "192.168.1.10:/volume1/media" : "//192.168.1.10/media"}
+          />
+        </div>
 
-        <label>Short name (a-z0-9-)</label>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="media" />
+        <div className="grid-2">
+          <TextField label="Short name (a-z0-9-)" value={name} onChange={(e) => setName(e.target.value)} placeholder="media" />
+          <TextField
+            label="Extra mount options (optional)"
+            hint="e.g. uid=101000,gid=101000 for write access"
+            value={opts}
+            onChange={(e) => setOpts(e.target.value)}
+            placeholder="uid=101000,gid=101000"
+          />
+        </div>
 
         {type === "cifs" && (
-          <>
-            <label>SMB username</label>
-            <input value={smbUser} onChange={(e) => setSmbUser(e.target.value)} />
-            <label>SMB domain/workgroup (optional)</label>
-            <input value={smbDomain} onChange={(e) => setSmbDomain(e.target.value)} />
-            <p className="muted small" style={{ marginTop: 6 }}>The SMB password is entered on the host when you run the command — it's never put in the command or sent to TorHQ.</p>
-          </>
+          <div className="grid-2">
+            <TextField label="SMB username" value={smbUser} onChange={(e) => setSmbUser(e.target.value)} />
+            <TextField label="SMB domain/workgroup (optional)" value={smbDomain} onChange={(e) => setSmbDomain(e.target.value)} />
+          </div>
+        )}
+        {type === "cifs" && (
+          <p className="muted small">
+            The SMB password is entered on the host when you run the command — it is never put in the command
+            or sent to TorHQ.
+          </p>
         )}
 
-        <label>Bind into container ID (optional — e.g. qBittorrent's CTID)</label>
-        <input value={ctid} onChange={(e) => setCtid(e.target.value)} placeholder="105" inputMode="numeric" />
-        {ctid && (
-          <>
-            <label>Mountpoint inside that container</label>
-            <input value={ctPath} onChange={(e) => setCtPath(e.target.value)} placeholder={`/mnt/${name || "media"}`} />
-          </>
-        )}
-
-        <label>Extra mount options (optional — e.g. uid=101000,gid=101000 for write access)</label>
-        <input value={opts} onChange={(e) => setOpts(e.target.value)} placeholder="uid=101000,gid=101000" />
-
-        <label style={{ marginTop: 12 }}>Run this on the Proxmox host</label>
-        <pre style={{ background: "var(--panel2)", padding: 12, borderRadius: 8, overflowX: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{command()}</pre>
-        <div className="flex" style={{ marginTop: 8 }}>
-          <button className="btn primary" onClick={copy} disabled={!remote || !name}>{copied ? "Copied ✓" : "Copy command"}</button>
-          <button className="btn" onClick={load}>Refresh mounts</button>
+        <div className="grid-2">
+          <TextField label="Bind into container ID (optional)" hint="e.g. qBittorrent's CTID" value={ctid} onChange={(e) => setCtid(e.target.value)} placeholder="105" inputMode="numeric" />
+          {ctid && (
+            <TextField label="Mountpoint inside that container" value={ctPath} onChange={(e) => setCtPath(e.target.value)} placeholder={`/mnt/${name || "media"}`} />
+          )}
         </div>
-      </div>
-    </div>
+
+        <Field label="Run this on the Proxmox host">
+          <pre>{command()}</pre>
+        </Field>
+        <div className="row">
+          <Button variant="primary" icon="copy" disabled={!remote || !name} onClick={() => void copy()}>
+            {copied ? "Copied" : "Copy command"}
+          </Button>
+        </div>
+      </Card>
+    </>
   );
 }
