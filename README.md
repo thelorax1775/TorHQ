@@ -33,6 +33,7 @@ over your \*arr apps' pipelines.
 - [Local development](#local-development)
 - [Environment variables](#environment-variables)
 - [First-run setup](#first-run-setup)
+- [Using TorHQ](#using-torhq)
 - [Production deployment (LXC)](#production-deployment-lxc)
 - [Backup & restore](#backup--restore)
 - [Security model](#security-model)
@@ -139,6 +140,10 @@ previewed, approved import.
 ---
 
 ## Search, grab, and the import loop
+
+This section explains the mechanism — what the sources are, how a grab is routed,
+and why an import stalls. For a click-by-click tour of the pages themselves, see
+[Using TorHQ](#using-torhq).
 
 The **Search** page has three sources. They answer different questions, so the
 page shows all three and lets you pick:
@@ -281,9 +286,16 @@ database — never in env, never in git. See [`.env.example`](.env.example).
 
 ## First-run setup
 
+Steps 1–3 get you a working UI. **Steps 4–6 are what make imports actually
+happen** — a stack that skips them looks perfectly configured and silently never
+imports anything. The Queue page's pipeline checks verify all of it, so if you
+would rather not read ahead: do steps 1–3, open **Queue**, and fix whatever it
+tells you.
+
 1. **Create the admin account.** The first visit shows a one-time registration
    screen (`POST /api/auth/register`). Once an admin exists, registration is
    permanently disabled and the screen becomes a login form.
+
 2. **Add your services.** On the **Services** page, enter each service's base URL
    and secret, use **Test connection**, then save. Secret formats:
    - Radarr / Sonarr / Lidarr / Prowlarr — API key
@@ -294,15 +306,151 @@ database — never in env, never in git. See [`.env.example`](.env.example).
    - Kavita — API key (optionally set a **library ID** to trigger explicit scans)
    - torrentsearch — no secret; set the base URL to a torrent-index mirror and,
      if needed, override the site-profile selectors / add a FlareSolverr URL
-3. **Define intake libraries.** On the **Libraries** page, create Kavita/Navidrome
-   destinations. Both the destination and staging paths must live inside an
-   approved root and, for atomic imports, on the same filesystem.
-4. **(Optional) qBittorrent categories.** To keep ownership clear, create
-   categories in qBittorrent such as `radarr`, `sonarr`, `lidarr`, `torhq-music`,
-   and `torhq-manual` (used by the torrent-search widget's raw grabs) so downloads
-   are attributed correctly on the dashboard.
+   - websearch — no secret for the default link-out provider; for Google
+     Programmable Search add a `cx` and an API key, or point `searxngUrl` at your
+     own SearXNG
 
-A scripted walkthrough of every endpoint is in [`docs/curl-examples.md`](docs/curl-examples.md).
+   Secrets are write-only: TorHQ shows *configured* / *not set* and never returns
+   the value. Leaving a secret field blank when editing keeps the stored one.
+
+3. **Define intake libraries** (only if you use manual intake). On the
+   **Libraries** page, create Kavita/Navidrome destinations. Both the destination
+   and staging paths must live inside an approved root and, for atomic imports,
+   on the same filesystem.
+
+4. **Create qBittorrent categories.** One per *arr, plus one you own:
+   `radarr`, `sonarr`, `lidarr`, `torhq-manual`. The category is how a finished
+   download is attributed to the app that should import it.
+
+5. **Wire qBittorrent into each \*arr.** In Radarr/Sonarr/Lidarr →
+   *Settings → Download Clients*, add qBittorrent, **set its category to the
+   matching name from step 4**, and make sure *Completed Download Handling* is
+   on. In Prowlarr → *Settings → Apps*, add each \*arr so indexers sync to them,
+   and add qBittorrent under *Settings → Download Clients*.
+
+6. **Make the download directory visible to each \*arr.** This is the step
+   that catches everyone. Each \*arr must be able to reach qBittorrent's save
+   path **at the same path string qBittorrent reports**, or it will be handed a
+   directory that does not exist in its filesystem and will never import.
+
+   On Proxmox LXC, bind-mount it into every \*arr container:
+
+   ```bash
+   # Replace 128 with each *arr's container id, and the paths with your own.
+   pct set 128 -mp3 /mnt/pve/storage/torrents,mp=/mnt/torrents
+   pct reboot 128
+   ```
+
+   Keep the container path identical to qBittorrent's and you need no remote path
+   mapping — and because downloads and libraries then share a filesystem, imports
+   **hardlink**: instant, and no second copy of the data.
+
+   Docker users: mount the same host directory at the same path in every
+   container, not `/downloads` in one and `/data/torrents` in another.
+
+Then open **Queue** and confirm the pipeline checks are green. A scripted
+walkthrough of every endpoint is in [`docs/curl-examples.md`](docs/curl-examples.md).
+
+---
+
+## Using TorHQ
+
+The sidebar is grouped by what you are trying to do.
+
+### Dashboard
+
+The landing page, ordered by what actually goes wrong. Pipeline health leads —
+those checks are what silently break imports — then current transfers and queue
+depth, then service health, storage and failed intake jobs. Every card polls
+independently, so one unreachable service degrades to a notice instead of
+blanking the page.
+
+### Acquire
+
+**Search** — the main event. Pick a source, type a term, and every result row
+ends in a grab.
+
+- **Prowlarr** aggregates every indexer you run. This is the one to reach for.
+  Narrow it with the indexer and category filters when a search is too broad.
+- **Torrent site** is the scraper, useful when Prowlarr is down or unconfigured.
+- **Web** is a link-out widget for working out *what* you want. It returns links,
+  never grabbable releases.
+
+Set **Send grabs to** before you grab — it decides what happens next:
+
+| Target | What happens |
+| --- | --- |
+| Radarr / Sonarr / Lidarr | The release goes to that \*arr's category and the \*arr is asked to poll immediately, so it adopts and imports without waiting. |
+| qBittorrent (manual) | Lands in `torhq-manual`. Nothing imports it; it is yours to organize. |
+
+The whole query — source, term, filters — lives in the URL, so a search is
+reloadable and shareable. `seeders: —` means the indexer reported no count; it
+does not mean zero.
+
+An unavailable source is shown disabled with the reason rather than hidden, so
+"Prowlarr: no enabled indexers" is visible instead of a silently missing tab.
+
+How a grab is actually routed, and what is accepted, is in
+[Search, grab, and the import loop](#search-grab-and-the-import-loop).
+
+> Grabbing into an \*arr's category only imports if that title is **added and
+> monitored** in the \*arr. Use **Requests** to add it first, or grab to
+> `torhq-manual` and handle it yourself.
+
+**Downloads** — everything in qBittorrent. Filter by state or category, select
+rows for bulk pause/resume/recheck/priority/category moves. Two removals:
+*Remove* takes the torrent out of the client and **leaves the files**;
+*Remove + delete files* destroys the data and requires typing `DELETE`.
+
+**Queue** — the \*arr side of those same downloads, and the page to open when
+something did not import.
+
+- **Pipeline health** — the checks from setup steps 4–6, re-run live. Each
+  failing check names the fix. TorHQ never applies one for you.
+- **Failed imports** — finished downloads the \*arr refused. *Retry import* asks
+  the owning \*arr to scan it again; the \*arr still does the moving and renaming.
+- **The queue itself** — expand a row for the \*arr's own error messages.
+  Removing an item can optionally also drop the torrent and blocklist the release
+  so it is not grabbed again. Files stay on disk either way.
+- **Poll download clients** forces every \*arr to check qBittorrent now, instead
+  of waiting for its own timer.
+
+**Requests** — ask an \*arr to add something new. Pick the route, search that
+\*arr's own lookup, choose the exact candidate (never "the first hit"), set the
+profile and root folder, confirm. TorHQ's job ends at that POST; the \*arr owns
+everything after.
+
+### Library
+
+**Intake** — manual staging for content the \*arr do not own: books, manga,
+comics and music going to Kavita/Navidrome. **Preview is mandatory** — a dry run
+validates both paths against the approved roots and shows exactly what would
+move, and the Import button disables itself the moment the form stops matching
+the preview, so a stale preview can never justify a different import. This never
+touches a Radarr/Sonarr/Lidarr library.
+
+**Libraries** — the Kavita/Navidrome destinations intake can target. Removing one
+only makes TorHQ forget it; nothing on disk is deleted, and the removal is
+refused while intake jobs are still queued against it.
+
+**Jobs & activity** — TorHQ's own intake worker, not the \*arr. Filter by status,
+expand a row for that job's history, retry a failed or dead one. The activity
+feed below is the append-only audit log of every action TorHQ took.
+
+### System
+
+**Services** — connections and credentials, with a per-service *Test connection*
+that reports the real reason for a failure (wrong port, 401, timeout) rather than
+a generic error.
+
+**Mounts** — read-only storage visibility: which network shares are bind-mounted
+in, and free space on each approved root. TorHQ runs unprivileged and cannot
+mount anything itself, so the "add a share" box generates the host-side command
+for you to run — nothing on this page changes storage.
+
+**Settings** — theme (system/dark/light) and background refresh rate, both stored
+in this browser only, plus the approved roots this instance is allowed to touch.
+Turning the refresh rate down is worth doing for an always-on wall display.
 
 ---
 
