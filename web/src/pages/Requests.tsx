@@ -1,13 +1,28 @@
-import { useState } from "react";
-import { api } from "../lib/api.js";
+/**
+ * Requests — ask Radarr, Sonarr or Lidarr to add something new.
+ *
+ * TorHQ only submits: pick a route, search that *arr's own lookup, choose the
+ * exact candidate (never "the first hit"), fill in the profile/root it needs,
+ * and confirm. The *arr owns search, grab, import, rename, and placement from
+ * there — this page's job ends at the POST.
+ */
+import { useEffect, useState } from "react";
+import { apiSend } from "../lib/api.js";
+import { useMutation } from "../lib/useMutation.js";
+import { usePolled } from "../lib/usePolled.js";
+import { bytes } from "../lib/format.js";
+import {
+  Alert, Async, Badge, Button, Card, EmptyState, PageHeader, SelectField, cx,
+} from "../components/ui.js";
+import { Icon, type IconName } from "../components/Icon.js";
 
-const TABS = [
-  { route: "movie", label: "Movie → Radarr" },
-  { route: "tv", label: "TV → Sonarr" },
-  { route: "music", label: "Artist → Lidarr" },
-];
+type RequestRoute = "movie" | "tv" | "music";
 
-type Candidate = {
+interface Profile { id: number; name: string }
+interface RootFolder { id: number; path: string; accessible?: boolean; freeSpace?: number }
+interface OptionsResponse { profiles: Profile[]; roots: RootFolder[]; metadataProfiles: Profile[] }
+
+interface ArrCandidate {
   selectionId: string;
   title: string;
   subtitle?: string;
@@ -15,132 +30,227 @@ type Candidate = {
   poster?: string;
   overview?: string;
   alreadyAdded: boolean;
-};
+}
+interface CandidatesResponse { candidates: ArrCandidate[] }
+
+interface RequestBody {
+  term: string;
+  selectionId: string;
+  qualityProfileId: number;
+  rootFolderPath: string;
+  searchNow?: boolean;
+  metadataProfileId?: number;
+}
+interface SubmitResponse { ok: true; id: number; title: string }
+
+const ROUTE_DEFS: Array<{ id: RequestRoute; label: string; service: string; icon: IconName; placeholder: string }> = [
+  { id: "movie", label: "Movie", service: "Radarr", icon: "star", placeholder: "e.g. Blade Runner 2049" },
+  { id: "tv", label: "TV show", service: "Sonarr", icon: "queue", placeholder: "e.g. Severance" },
+  { id: "music", label: "Artist", service: "Lidarr", icon: "activity", placeholder: "e.g. Radiohead" },
+];
 
 export function Requests() {
-  const [tab, setTab] = useState("movie");
+  const [route, setRoute] = useState<RequestRoute>("movie");
   const [term, setTerm] = useState("");
-  const [opts, setOpts] = useState<any>(null);
+  const [committedTerm, setCommittedTerm] = useState<string | null>(null);
   const [profile, setProfile] = useState<number | "">("");
-  const [metaProfile, setMetaProfile] = useState<number | "">("");
+  const [metadataProfile, setMetadataProfile] = useState<number | "">("");
   const [root, setRoot] = useState("");
-  const [candidates, setCandidates] = useState<Candidate[] | null>(null);
-  const [selection, setSelection] = useState<Candidate | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [selected, setSelected] = useState<ArrCandidate | null>(null);
 
-  const isMusic = tab === "music";
+  const routeDef = ROUTE_DEFS.find((r) => r.id === route)!;
+  const isMusic = route === "music";
 
-  async function loadOpts(route: string) {
-    setTab(route); setOpts(null); setMsg(null);
-    setProfile(""); setMetaProfile(""); setRoot("");
-    setCandidates(null); setSelection(null); setTerm("");
-    try {
-      const o = await api(`/api/requests/${route}/options`);
-      setOpts(o);
-      if (o.profiles?.[0]) setProfile(o.profiles[0].id);
-      if (o.roots?.[0]) setRoot(o.roots[0].path);
-      if (o.metadataProfiles?.[0]) setMetaProfile(o.metadataProfiles[0].id);
-    } catch (e) { setMsg((e as Error).message); }
+  const optionsQ = usePolled<OptionsResponse>(`/api/requests/${route}/options`);
+  const searchQ = usePolled<CandidatesResponse>(
+    committedTerm ? `/api/requests/${route}/search?term=${encodeURIComponent(committedTerm)}` : null,
+  );
+
+  const submit = useMutation(
+    (body: RequestBody) => apiSend<SubmitResponse>(`/api/requests/${route}`, "POST", body),
+  );
+
+  // Switching routes starts over: a candidate/profile chosen for a movie means
+  // nothing once the tab says "artist".
+  useEffect(() => {
+    setTerm(""); setCommittedTerm(null); setSelected(null);
+    setProfile(""); setMetadataProfile(""); setRoot("");
+    submit.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route]);
+
+  // Pre-fill from the first option once they load, but never clobber a choice
+  // the user already made (e.g. a background refresh of the same options).
+  useEffect(() => {
+    const opts = optionsQ.data;
+    if (!opts) return;
+    setProfile((p) => (p === "" && opts.profiles[0] ? opts.profiles[0].id : p));
+    setRoot((r) => (r === "" && opts.roots[0] ? opts.roots[0].path : r));
+    setMetadataProfile((m) => (m === "" && opts.metadataProfiles[0] ? opts.metadataProfiles[0].id : m));
+  }, [optionsQ.data]);
+
+  function runSearch() {
+    const t = term.trim();
+    if (!t) return;
+    setSelected(null);
+    submit.reset();
+    setCommittedTerm(t);
   }
 
-  async function search() {
-    setMsg(null); setCandidates(null); setSelection(null);
-    if (!term) return;
-    setBusy(true);
-    try {
-      const r = await api<{ candidates: Candidate[] }>(`/api/requests/${tab}/search?term=${encodeURIComponent(term)}`);
-      setCandidates(r.candidates);
-      if (r.candidates.length === 0) setMsg("No matches found.");
-    } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
+  async function doSubmit() {
+    if (!selected || committedTerm == null || profile === "") return;
+    const body: RequestBody = {
+      term: committedTerm,
+      selectionId: selected.selectionId,
+      qualityProfileId: profile,
+      rootFolderPath: root,
+      searchNow: true,
+      ...(isMusic ? { metadataProfileId: metadataProfile === "" ? undefined : metadataProfile } : {}),
+    };
+    const r = await submit.run(body);
+    if (r.ok) { setSelected(null); setCommittedTerm(null); setTerm(""); }
   }
 
-  async function submit() {
-    if (!selection) return;
-    setMsg(null); setBusy(true);
-    try {
-      const payload: any = {
-        term, selectionId: selection.selectionId,
-        qualityProfileId: Number(profile), rootFolderPath: root, searchNow: true,
-      };
-      if (isMusic && metaProfile !== "") payload.metadataProfileId = Number(metaProfile);
-      const r = await api(`/api/requests/${tab}`, { method: "POST", body: JSON.stringify(payload) });
-      setMsg(`Requested: ${r.title}`);
-      setCandidates(null); setSelection(null); setTerm("");
-    } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); }
-  }
-
-  const canSubmit = !!selection && !!profile && !!root && (!isMusic || metaProfile !== "");
+  const canSubmit = selected != null && profile !== "" && root !== "" && (!isMusic || metadataProfile !== "");
 
   return (
-    <div>
-      <h1>Requests</h1>
-      <div className="flex" style={{ marginBottom: 14 }}>
-        {TABS.map((t) => (
-          <button key={t.route} className={"btn " + (tab === t.route ? "primary" : "")} onClick={() => loadOpts(t.route)}>{t.label}</button>
-        ))}
-      </div>
+    <>
+      <PageHeader
+        title="Requests"
+        subtitle="Ask Radarr, Sonarr or Lidarr to add something new. TorHQ only submits the request — the *arr owns search, grab, import, rename, and final placement."
+      />
 
-      <div className="card">
-        <p className="muted small">TorHQ only submits the request. Search, pick the intended result, then confirm — the *arr owns search, grab, import, rename, and final placement.</p>
-
-        {!opts && <p className="muted small" style={{ marginTop: 10 }}>Select a tab above to load its quality profiles and root folders.</p>}
-
-        {opts && (
-          <>
-            <label>Search term</label>
-            <div className="flex">
-              <input style={{ flex: 1 }} value={term} onChange={(e) => setTerm(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") search(); }}
-                placeholder={isMusic ? "e.g. Radiohead" : "e.g. Blade Runner 2049"} />
-              <button className="btn" onClick={search} disabled={!term || busy}>Search</button>
-            </div>
-
-            <label>Quality profile</label>
-            <select value={profile} onChange={(e) => setProfile(Number(e.target.value))}>
-              {opts.profiles?.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-
-            {isMusic && (
-              <>
-                <label>Metadata profile (required for Lidarr)</label>
-                <select value={metaProfile} onChange={(e) => setMetaProfile(Number(e.target.value))}>
-                  {opts.metadataProfiles?.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
-              </>
-            )}
-
-            <label>Root folder</label>
-            <select value={root} onChange={(e) => setRoot(e.target.value)}>
-              {opts.roots?.map((r: any) => <option key={r.id} value={r.path}>{r.path}</option>)}
-            </select>
-          </>
-        )}
-        {msg && <p className={"small " + (msg.startsWith("Requested") ? "ok-text" : "err-text")} style={{ marginTop: 10 }}>{msg}</p>}
-      </div>
-
-      {candidates && candidates.length > 0 && (
-        <div className="card">
-          <h2>Choose a result</h2>
-          {candidates.map((c) => (
-            <label key={c.selectionId} className="row" style={{ cursor: "pointer", alignItems: "flex-start", gap: 10 }}>
-              <input type="radio" name="candidate" style={{ marginTop: 4 }}
-                checked={selection?.selectionId === c.selectionId}
-                onChange={() => setSelection(c)} />
-              <span style={{ flex: 1 }}>
-                <strong>{c.title}</strong>{c.year ? ` (${c.year})` : ""}
-                {c.subtitle ? <span className="muted small"> · {c.subtitle}</span> : null}
-                {c.alreadyAdded ? <span className="badge small" style={{ marginLeft: 6 }}>already added</span> : null}
-                {c.overview ? <div className="muted small" style={{ marginTop: 2 }}>{c.overview}</div> : null}
-              </span>
-            </label>
+      <Card flush>
+        <div className="tabs" role="group" aria-label="What are you requesting?">
+          {ROUTE_DEFS.map((r) => (
+            <button
+              key={r.id}
+              type="button"
+              className={cx("tab", route === r.id && "active")}
+              aria-pressed={route === r.id}
+              onClick={() => setRoute(r.id)}
+            >
+              <Icon name={r.icon} size={14} />
+              {r.label} → {r.service}
+            </button>
           ))}
-          <div className="flex" style={{ marginTop: 14 }}>
-            <button className="btn primary" onClick={submit} disabled={!canSubmit || busy}>Confirm request</button>
-            {selection?.alreadyAdded && <span className="muted small">This title is already in the library; confirming will not duplicate it.</span>}
-          </div>
         </div>
+
+        <div className="card-body">
+          <Async q={optionsQ} what={`${routeDef.service} options`}>
+            {(opts) => (
+              <div className="stack">
+                <div className="row-nowrap">
+                  <div className="searchbar">
+                    <Icon name="search" size={14} />
+                    <input
+                      className="input"
+                      value={term}
+                      placeholder={routeDef.placeholder}
+                      onChange={(e) => setTerm(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") runSearch(); }}
+                      aria-label={`Search for a ${routeDef.label.toLowerCase()}`}
+                    />
+                  </div>
+                  <Button variant="primary" icon="search" disabled={!term.trim()} onClick={runSearch}>Search</Button>
+                </div>
+
+                <div className="grid-2">
+                  <SelectField
+                    label="Quality profile"
+                    value={profile}
+                    onChange={(e) => setProfile(Number(e.target.value))}
+                  >
+                    {opts.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </SelectField>
+                  <SelectField
+                    label="Root folder"
+                    value={root}
+                    onChange={(e) => setRoot(e.target.value)}
+                  >
+                    {opts.roots.map((r) => (
+                      <option key={r.id} value={r.path}>
+                        {r.path}{r.freeSpace != null ? ` · ${bytes(r.freeSpace)} free` : ""}
+                      </option>
+                    ))}
+                  </SelectField>
+                  {isMusic && (
+                    <SelectField
+                      label="Metadata profile"
+                      hint="Lidarr requires one to add an artist."
+                      value={metadataProfile}
+                      onChange={(e) => setMetadataProfile(Number(e.target.value))}
+                    >
+                      {opts.metadataProfiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </SelectField>
+                  )}
+                </div>
+              </div>
+            )}
+          </Async>
+        </div>
+      </Card>
+
+      {submit.error && <Alert tone="err" title="Request failed">{submit.error}</Alert>}
+      {submit.data && (
+        <Alert tone="ok" title="Requested">
+          "{submit.data.title}" was sent to {routeDef.service}.
+        </Alert>
       )}
-    </div>
+
+      {committedTerm && (
+        <Card title={`Results for "${committedTerm}"`}>
+          <Async q={searchQ} what="candidates">
+            {(data) => (
+              data.candidates.length === 0 ? (
+                <EmptyState icon="search" title="No matches" message="Try a different search term." />
+              ) : (
+                <div className="stack">
+                  <div className="list">
+                    {data.candidates.map((c) => (
+                      <label key={c.selectionId} className="list-row" style={{ alignItems: "flex-start", cursor: "pointer" }}>
+                        <input
+                          type="radio"
+                          name="candidate"
+                          style={{ marginTop: 4 }}
+                          checked={selected?.selectionId === c.selectionId}
+                          onChange={() => setSelected(c)}
+                          aria-label={`Select ${c.title}`}
+                        />
+                        {c.poster && (
+                          <img
+                            src={c.poster}
+                            alt=""
+                            width={40}
+                            style={{ borderRadius: 4, flex: "none" }}
+                            onError={(e) => { e.currentTarget.style.display = "none"; }}
+                          />
+                        )}
+                        <div className="grow">
+                          <div>
+                            <strong>{c.title}</strong>{c.year ? ` (${c.year})` : ""}
+                            {c.alreadyAdded && <> <Badge tone="info">already in library</Badge></>}
+                          </div>
+                          {c.subtitle && <div className="small muted">{c.subtitle}</div>}
+                          {c.overview && <div className="small muted mt-2 clamp-2">{c.overview}</div>}
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="row">
+                    <Button variant="primary" icon="send" disabled={!canSubmit} pending={submit.pending} onClick={() => void doSubmit()}>
+                      Confirm request
+                    </Button>
+                    {selected?.alreadyAdded && (
+                      <span className="small muted">Already in the library — confirming will not duplicate it.</span>
+                    )}
+                  </div>
+                </div>
+              )
+            )}
+          </Async>
+        </Card>
+      )}
+    </>
   );
 }
