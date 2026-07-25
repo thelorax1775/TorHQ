@@ -84,34 +84,103 @@ curl -s -b $JAR -X POST $BASE/api/requests/music \
   -d '{"term":"Radiohead","selectionId":"mbid:a74b1b7f-71a5-4011-9441-d0b5e4122711","qualityProfileId":1,"metadataProfileId":1,"rootFolderPath":"/data/music","searchNow":true}'
 ```
 
-## 4b. Torrent search → qBittorrent
+## 4b. Search → grab
 
-Configure a `torrentsearch` service (base URL = a torrent-index mirror) and
-qBittorrent, then search and grab. `/api/search` is read-only; `/api/search/grab`
-mutates (needs the CSRF header). Only `magnet:` links are accepted, and `category`
-is one of `torhq-manual` (default), `radarr`, `sonarr`, `lidarr`.
+Three sources sit behind `/api/search`: `prowlarr` (the default, aggregated
+across every indexer Prowlarr manages), `site` (a scraped torrent-index mirror),
+and `web` (a general web widget that returns links, not grabbable releases).
+`/api/search*` reads are auth-only; `/api/search/grab` mutates and needs the CSRF
+header.
 
 ```bash
-# Configure the torrent-search site (selectors default to a KAT-style layout;
-# override any of them, and optionally add a FlareSolverr URL, via extra):
-curl -s -b $JAR -X POST $BASE/api/services \
-  -H "x-csrf-token: $CSRF" -H 'content-type: application/json' \
-  -d '{"kind":"torrentsearch","label":"KAT","baseUrl":"https://your-kat-mirror.example","extra":{"flaresolverrUrl":"http://127.0.0.1:8191"}}'
+# What can be searched right now, and why not when it can't. An unavailable
+# source is still listed, with the reason in `detail`:
+curl -s -b $JAR "$BASE/api/search/sources" | jq
+#   -> { "sources": [ { "id": "prowlarr", "label": "Prowlarr", "available": true, "detail": "9 indexers" }, ... ] }
 
-# Search (strongest-seeded first):
-curl -s -b $JAR "$BASE/api/search?q=Blade%20Runner%202049%202160p" | jq
-#   -> { "results": [ { "title": "...", "magnet": "magnet:?xt=urn:btih:...", "seeders": 1234, ... } ] }
+# Prowlarr's indexers, for the category/indexer filters:
+curl -s -b $JAR "$BASE/api/search/indexers" | jq '.indexers[] | {id, name, enable}'
 
-# Grab a chosen magnet straight into qBittorrent (raw, torhq-manual category):
+# Search every indexer Prowlarr manages (strongest-seeded first). `seeders: null`
+# means the indexer reported no count — it does not mean zero:
+curl -s -b $JAR "$BASE/api/search?source=prowlarr&q=Blade%20Runner%202049%202160p" | jq
+#   -> { "source": "prowlarr", "results": [ { "guid": "...", "indexerId": 2, "title": "...", "seeders": 900, ... } ] }
+
+# Narrow it to specific indexers and categories (comma-separated):
+curl -s -b $JAR "$BASE/api/search?source=prowlarr&q=blade+runner&indexerIds=2,7&categories=2000&limit=50" | jq
+
+# The configured torrent site instead (returns magnets):
+curl -s -b $JAR "$BASE/api/search?source=site&q=blade+runner" | jq
+
+# The web widget. With no provider configured it returns ready-made link-outs and
+# still works; a configured provider that fails degrades to those and says so:
+curl -s -b $JAR "$BASE/api/search?source=web&q=what+order+to+watch+blade+runner" | jq
+```
+
+Grabbing routes the release to whoever should import it. A Prowlarr release is
+identified by `guid` + `indexerId`; a site result by its magnet.
+
+```bash
+# Hand a Prowlarr release to Radarr: Prowlarr passes it to its download client,
+# then Radarr is nudged to adopt and import it. Radarr owns the import.
 curl -s -b $JAR -X POST $BASE/api/search/grab \
   -H "x-csrf-token: $CSRF" -H 'content-type: application/json' \
-  -d '{"magnet":"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567","title":"Blade Runner 2049"}'
+  -d '{"source":"prowlarr","guid":"https://indexer.example/download.php?id=1","indexerId":2,"target":"radarr","title":"Blade Runner 2049"}'
 
-# Or tag it for Radarr to adopt and import (requires qB wired as Radarr's client
-# with a matching "radarr" category):
+# Or keep it: `manual` lands in the torhq-manual category, which no *arr touches.
 curl -s -b $JAR -X POST $BASE/api/search/grab \
   -H "x-csrf-token: $CSRF" -H 'content-type: application/json' \
-  -d '{"magnet":"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567","category":"radarr"}'
+  -d '{"source":"prowlarr","guid":"https://indexer.example/download.php?id=1","indexerId":2,"target":"manual"}'
+
+# A site result is a magnet. Only well-formed magnet:?xt=urn:btih:<hash> is accepted:
+curl -s -b $JAR -X POST $BASE/api/search/grab \
+  -H "x-csrf-token: $CSRF" -H 'content-type: application/json' \
+  -d '{"source":"site","magnet":"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567","target":"sonarr"}'
+```
+
+## 4c. Downloads, queue, and why an import stalled
+
+```bash
+# Everything in qBittorrent, with global rates and the category map:
+curl -s -b $JAR "$BASE/api/downloads" | jq '.torrents[] | {name, category, state, progress}'
+
+# Act on torrents. deleteWithFiles is the only action that destroys data on disk:
+curl -s -b $JAR -X POST $BASE/api/downloads/action \
+  -H "x-csrf-token: $CSRF" -H 'content-type: application/json' \
+  -d '{"hashes":["0123456789abcdef0123456789abcdef01234567"],"action":"pause"}'
+
+# The Radarr/Sonarr/Lidarr queues merged. A service that is down is listed under
+# `unavailable` and never fails the response:
+curl -s -b $JAR "$BASE/api/queue" | jq '{items: [.items[] | {service, title, trackedDownloadState}], unavailable}'
+
+# Ask every *arr to poll its download client right now:
+curl -s -b $JAR -X POST $BASE/api/queue/refresh -H "x-csrf-token: $CSRF" | jq
+
+# Drop one item. Files stay on disk either way:
+curl -s -b $JAR -X POST $BASE/api/queue/radarr/12/remove \
+  -H "x-csrf-token: $CSRF" -H 'content-type: application/json' \
+  -d '{"removeFromClient":true,"blocklist":true}'
+```
+
+The pipeline checks answer "why did this download never become a library file?"
+They are read-only: each failing check names the fix, and TorHQ never applies it.
+
+```bash
+# Only the problems, with what to do about each:
+curl -s -b $JAR "$BASE/api/pipeline/check" | jq '.checks[] | select(.ok | not) | {severity, label, detail, fix}'
+#   The one that catches everyone:
+#   "Radarr can see qBittorrent's download directory" -> error, "Radarr cannot see
+#   /mnt/torrents/radarr" — the directory was never mounted into Radarr's
+#   container, so downloads complete and then sit there with no error anywhere.
+
+# Downloads that finished but could not be imported:
+curl -s -b $JAR "$BASE/api/pipeline/failed-imports" | jq '.items[] | {service, title, reason}'
+
+# Ask the owning *arr to scan one again. It does the scanning, moving and
+# renaming; TorHQ only points it at its own output path:
+curl -s -b $JAR -X POST $BASE/api/pipeline/manual-import \
+  -H "x-csrf-token: $CSRF" -H 'content-type: application/json' \
+  -d '{"service":"radarr","downloadId":"0123456789abcdef0123456789abcdef01234567"}'
 ```
 
 ## 5. Manual intake (books/manga -> Kavita, music -> Navidrome)
