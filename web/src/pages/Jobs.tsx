@@ -1,67 +1,229 @@
-import { useEffect, useState } from "react";
-import { api } from "../lib/api.js";
+/**
+ * Jobs & activity — TorHQ's own manual-intake worker, not the *arr.
+ *
+ * Consumes `GET /api/jobs` (the durable job queue), `POST /api/jobs/:id/retry`,
+ * and `GET /api/activity` (the append-only audit log). A job's own history is
+ * fetched on demand via `GET /api/jobs/:id` when its row is expanded, so the
+ * list view stays a single cheap request.
+ */
+import { Fragment, useState } from "react";
+import { apiSend } from "../lib/api.js";
+import { useMutation } from "../lib/useMutation.js";
+import { usePolled } from "../lib/usePolled.js";
+import { ago, plural } from "../lib/format.js";
+import {
+  Alert, Async, Badge, Button, Card, EmptyState, PageHeader,
+  RefreshButton, StaleNotice, Stat, TableWrap, type Tone,
+} from "../components/ui.js";
 
-const STATUS_CLASS: Record<string, string> = {
-  completed: "ok", imported: "ok", failed: "err", dead: "err",
-  queued: "warn", running: "warn",
+type JobStatus = "queued" | "running" | "completed" | "failed" | "dead";
+
+interface Job {
+  id: string;
+  status: JobStatus;
+  libraryKey: string | null;
+  sourcePath: string;
+  attempts: number;
+  maxAttempts: number;
+  lastError: string | null;
+  createdAt: number;
+}
+interface JobsResponse { jobs: Job[] }
+
+interface ActivityEntry {
+  id: number;
+  jobId: string | null;
+  kind: string;
+  service: string | null;
+  message: string;
+  createdAt: number;
+}
+interface ActivityResponse { activity: ActivityEntry[] }
+interface JobDetailResponse { job: Job; activity: ActivityEntry[] }
+
+const STATUS_META: Record<JobStatus, { tone: Tone; label: string }> = {
+  queued: { tone: "neutral", label: "Queued" },
+  running: { tone: "info", label: "Running" },
+  completed: { tone: "ok", label: "Completed" },
+  failed: { tone: "err", label: "Failed" },
+  dead: { tone: "err", label: "Dead" },
+};
+const statusMeta = (s: JobStatus) => STATUS_META[s] ?? { tone: "neutral" as Tone, label: s };
+const canRetry = (s: JobStatus) => s === "dead" || s === "failed";
+
+/** Activity kinds → badge tone. Anything not listed renders as `neutral`. */
+const KIND_TONE: Record<string, Tone> = {
+  requested: "info", queued: "neutral", downloading: "accent", completed: "ok",
+  importing: "info", imported: "ok", failed: "err",
 };
 
 export function Jobs() {
-  const [jobs, setJobs] = useState<any[]>([]);
-  const [activity, setActivity] = useState<any[]>([]);
-  const [sel, setSel] = useState<any>(null);
+  const q = usePolled<JobsResponse>("/api/jobs", 8000);
+  const activity = usePolled<ActivityResponse>("/api/activity?limit=100", 15000);
 
-  async function load() {
-    setJobs((await api("/api/jobs")).jobs);
-    setActivity((await api("/api/activity?limit=50")).activity);
-  }
-  useEffect(() => { load(); const t = setInterval(load, 8000); return () => clearInterval(t); }, []);
+  const [status, setStatus] = useState("all");
+  const [openId, setOpenId] = useState<string | null>(null);
+  const detail = usePolled<JobDetailResponse>(openId ? `/api/jobs/${openId}` : null, 0);
 
-  async function open(id: string) { setSel(await api(`/api/jobs/${id}`)); }
-  async function retry(id: string) { await api(`/api/jobs/${id}/retry`, { method: "POST" }); load(); }
+  const retry = useMutation(
+    (id: string) => apiSend<{ ok: true; job: Job }>(`/api/jobs/${id}/retry`, "POST"),
+    { invalidates: ["/api/jobs", "/api/activity"] },
+  );
+
+  const jobs = q.data?.jobs ?? [];
+  const visible = status === "all" ? jobs : jobs.filter((j) => j.status === status);
+  const counts = {
+    running: jobs.filter((j) => j.status === "running").length,
+    queued: jobs.filter((j) => j.status === "queued").length,
+    dead: jobs.filter((j) => j.status === "dead" || j.status === "failed").length,
+  };
 
   return (
-    <div>
-      <h1>Jobs & activity</h1>
-      <div className="card">
-        <h2>Jobs</h2>
-        <table><thead><tr><th>Library</th><th>Source</th><th>Status</th><th>Attempts</th><th></th></tr></thead>
-          <tbody>{jobs.map((j) => (
-            <tr key={j.id}>
-              <td>{j.libraryKey}</td>
-              <td className="small" style={{ maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{j.sourcePath}</td>
-              <td><span className={"badge " + (STATUS_CLASS[j.status] ?? "")}>{j.status}</span></td>
-              <td className="muted">{j.attempts}/{j.maxAttempts}</td>
-              <td className="flex">
-                <button className="btn small" onClick={() => open(j.id)}>Log</button>
-                {(j.status === "dead" || j.status === "failed") && <button className="btn small" onClick={() => retry(j.id)}>Retry</button>}
-              </td>
-            </tr>
-          ))}</tbody>
-        </table>
-        {!jobs.length && <p className="muted small">No jobs yet.</p>}
-      </div>
+    <>
+      <PageHeader
+        title="Jobs & activity"
+        subtitle="TorHQ's own manual-intake worker (books, manga, music) — not the *arr, which import themselves."
+        actions={<RefreshButton q={q} />}
+      />
 
-      {sel && (
-        <div className="card">
-          <h2>Job {sel.job.id.slice(0, 8)} — {sel.job.status}</h2>
-          {sel.job.lastError && <p className="err-text small">{sel.job.lastError}</p>}
-          {sel.activity.map((a: any) => (
-            <div key={a.id} className="row"><span className="small">{a.kind}: {a.message}</span>
-              <span className="muted small">{new Date(a.createdAt).toLocaleTimeString()}</span></div>
-          ))}
-        </div>
-      )}
+      <Async q={q} what="jobs">
+        {(data) => (
+          <div className="stack">
+            <div className="stat-grid">
+              <Stat label="Jobs" value={data.jobs.length} />
+              <Stat label="Running" value={counts.running} />
+              <Stat label="Queued" value={counts.queued} />
+              <Stat label="Dead / failed" value={counts.dead} tone={counts.dead ? "err" : "ok"} />
+            </div>
 
-      <div className="card">
-        <h2>Recent activity</h2>
-        {activity.map((a) => (
-          <div key={a.id} className="row">
-            <span className="small"><span className="badge">{a.kind}</span> {a.message}</span>
-            <span className="muted small">{new Date(a.createdAt).toLocaleTimeString()}</span>
+            {retry.error && <Alert tone="err" title="Retry failed">{retry.error}</Alert>}
+
+            <Card flush>
+              <div className="toolbar">
+                <select className="select input-sm" value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Filter by status" style={{ width: "auto" }}>
+                  <option value="all">All statuses</option>
+                  {(["queued", "running", "completed", "failed", "dead"] as const).map((s) => (
+                    <option key={s} value={s}>{STATUS_META[s].label}</option>
+                  ))}
+                </select>
+                <span className="muted small">{plural(visible.length, "job")}</span>
+              </div>
+
+              {visible.length === 0 ? (
+                <EmptyState
+                  icon="clock"
+                  title={jobs.length ? "Nothing matches that filter" : "No jobs yet"}
+                  message={jobs.length ? "Clear the filter to see the rest." : "Manual intake jobs queued from the Intake page will show up here."}
+                />
+              ) : (
+                <TableWrap>
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Library</th>
+                        <th>Source</th>
+                        <th>Status</th>
+                        <th className="num">Attempts</th>
+                        <th className="num">Created</th>
+                        <th className="shrink" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visible.map((j) => {
+                        const meta = statusMeta(j.status);
+                        const open = openId === j.id;
+                        return (
+                          <Fragment key={j.id}>
+                            <tr>
+                              <td className="nowrap">{j.libraryKey ?? <span className="dim">—</span>}</td>
+                              <td style={{ maxWidth: 380 }}>
+                                <div className="truncate mono small" title={j.sourcePath}>{j.sourcePath}</div>
+                                {j.lastError && <div className="truncate dim xs" title={j.lastError}>{j.lastError}</div>}
+                              </td>
+                              <td className="nowrap"><Badge tone={meta.tone}>{meta.label}</Badge></td>
+                              <td className="num">{j.attempts}/{j.maxAttempts}</td>
+                              <td className="num dim">{ago(j.createdAt)}</td>
+                              <td className="shrink row-nowrap">
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  icon={open ? "up" : "down"}
+                                  title={open ? "Hide log" : "Show job log"}
+                                  aria-label={open ? `Hide log for ${j.sourcePath}` : `Show log for ${j.sourcePath}`}
+                                  aria-expanded={open}
+                                  onClick={() => setOpenId(open ? null : j.id)}
+                                />
+                                {canRetry(j.status) && (
+                                  <Button
+                                    size="sm"
+                                    icon="refresh"
+                                    pending={retry.pending}
+                                    title="Retry this job"
+                                    aria-label={`Retry ${j.sourcePath}`}
+                                    onClick={() => void retry.run(j.id)}
+                                  >
+                                    Retry
+                                  </Button>
+                                )}
+                              </td>
+                            </tr>
+                            {open && (
+                              <tr className="selected">
+                                <td colSpan={6}>
+                                  <Async q={detail} what="the job log" skeleton={<div className="small muted">Loading…</div>}>
+                                    {(d) => (
+                                      d.activity.length === 0 ? (
+                                        <div className="small muted">No activity recorded for this job yet.</div>
+                                      ) : (
+                                        <div className="list">
+                                          {d.activity.map((a) => (
+                                            <div key={a.id} className="list-row">
+                                              <Badge tone={KIND_TONE[a.kind] ?? "neutral"}>{a.kind}</Badge>
+                                              <div className="grow small break">{a.message}</div>
+                                              <span className="small dim nowrap">{ago(a.createdAt)}</span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )
+                                    )}
+                                  </Async>
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </TableWrap>
+              )}
+            </Card>
+
+            <StaleNotice q={q} />
           </div>
-        ))}
-      </div>
-    </div>
+        )}
+      </Async>
+
+      <Card title="Recent activity" subtitle="Every job, request and import event TorHQ has logged." icon="activity">
+        <Async q={activity} what="activity">
+          {(data) => (
+            data.activity.length === 0 ? (
+              <EmptyState icon="activity" title="Nothing logged yet" />
+            ) : (
+              <div className="list">
+                {data.activity.map((a) => (
+                  <div key={a.id} className="list-row">
+                    <Badge tone={KIND_TONE[a.kind] ?? "neutral"}>{a.kind}</Badge>
+                    <div className="grow small break">{a.message}</div>
+                    {a.service && <span className="small dim">{a.service}</span>}
+                    <span className="small dim nowrap">{ago(a.createdAt)}</span>
+                  </div>
+                ))}
+              </div>
+            )
+          )}
+        </Async>
+      </Card>
+    </>
   );
 }
