@@ -38,10 +38,11 @@ export interface ArrSnapshot {
   rootFolders?: Array<{ id: number; path: string; accessible?: boolean }>;
   queue?: ArrQueueItem[];
   /**
-   * For each directory qBittorrent saves into: can this *arr actually see it
-   * through its own filesystem? Undefined when TorHQ could not ask.
+   * For each directory qBittorrent saves into: can this *arr see it through its
+   * own filesystem, and failing that, can it see the parent? Undefined when
+   * TorHQ could not ask.
    */
-  visiblePaths?: Array<{ path: string; visible: boolean }>;
+  visiblePaths?: Array<{ path: string; visible: boolean; parentVisible: boolean }>;
 }
 
 /** How long an item may sit in import limbo before it counts as stuck. */
@@ -276,6 +277,11 @@ function rootFolderCheck(arr: ArrSnapshot, name: string, qb: QbSnapshot): Pipeli
  * because the download directory was never mounted into its container, so the
  * path it is being handed does not exist in its filesystem at all. This asks the
  * *arr directly, through its own file browser.
+ *
+ * A category's save path is only created by qBittorrent when a torrent first
+ * lands in it, so a missing subdirectory whose parent *is* visible is normal on
+ * a new category and must not be reported as a mount failure. Only a parent the
+ * *arr cannot see means the mount is genuinely absent.
  */
 function savePathVisibleCheck(arr: ArrSnapshot, name: string, qb: QbSnapshot): PipelineCheck {
   const base = { id: `${arr.service}-sees-save-path`, label: `${name} can see qBittorrent's download directory` };
@@ -294,20 +300,32 @@ function savePathVisibleCheck(arr: ArrSnapshot, name: string, qb: QbSnapshot): P
       fix: `Confirm the API key stored for ${name} has full access.`,
     };
   }
-  const missing = arr.visiblePaths.filter((v) => !v.visible);
-  if (missing.length) {
+
+  const unmounted = arr.visiblePaths.filter((v) => !v.visible && !v.parentVisible);
+  if (unmounted.length) {
     return {
       ...base, ok: false, severity: "error",
-      detail: `${name} cannot see ${missing.map((v) => v.path).join(", ")}. `
+      detail: `${name} cannot see ${unmounted.map((v) => v.path).join(", ")}, nor the directory above. `
         + "Downloads will complete in qBittorrent and then sit there forever, with no error in either app.",
       fix: `Mount that directory into ${name}'s container at the same path qBittorrent uses. `
         + "On Proxmox: `pct set <ctid> -mpN /host/path,mp=/same/path/qbittorrent/uses`, then reboot the container. "
         + "Keeping the path identical also avoids a remote path mapping, and lets imports hardlink instead of copy.",
     };
   }
+
+  const pending = arr.visiblePaths.filter((v) => !v.visible);
+  const mounted = arr.visiblePaths.filter((v) => v.visible).map((v) => v.path);
+  if (pending.length) {
+    return {
+      ...base, ok: true, severity: "info",
+      detail: `${name} can see the download directory. `
+        + `${pending.map((v) => v.path).join(", ")} does not exist yet — qBittorrent creates a category's `
+        + "save path when the first torrent lands in it, and it will be visible then.",
+    };
+  }
   return {
     ...base, ok: true, severity: "info",
-    detail: `${name} can browse ${arr.visiblePaths.map((v) => v.path).join(", ")}.`,
+    detail: `${name} can browse ${mounted.join(", ")}.`,
   };
 }
 

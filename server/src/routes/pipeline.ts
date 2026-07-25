@@ -137,24 +137,38 @@ function downloadPaths(qb: QbSnapshot): string[] {
 }
 
 /**
- * Ask the *arr to browse each save path's parent and report whether the path is
- * there. Listing the parent rather than the path itself is deliberate: an empty
- * directory and a directory that does not exist both list as empty, so only the
- * parent's children distinguish "mounted but idle" from "not mounted at all".
- * A browse call that throws means we could not determine visibility, which is
- * reported as unknown (undefined) rather than as a failure.
+ * Ask the *arr to browse each save path, and its parent, through its own
+ * filesystem. Listing the parent rather than only the path is what separates the
+ * two failures that look identical from outside: a category directory that
+ * qBittorrent has simply not created yet (parent visible) from a download
+ * directory that was never mounted into the container at all (parent missing).
+ * An empty directory and a non-existent one both list as empty, so the child
+ * listing alone cannot tell them apart.
+ *
+ * A browse call that throws means visibility is unknown, which is reported as
+ * undefined rather than as a failure.
  */
 async function probeVisibility(
   arr: ArrAdapter, savePaths: string[],
-): Promise<Array<{ path: string; visible: boolean }> | undefined> {
+): Promise<Array<{ path: string; visible: boolean; parentVisible: boolean }> | undefined> {
   if (savePaths.length === 0) return [];
   try {
     return await Promise.all(savePaths.map(async (path) => {
       const trimmed = path.replace(/\/+$/, "");
       const parent = trimmed.slice(0, trimmed.lastIndexOf("/")) || "/";
-      const children = await arr.listFolders(parent);
-      const wanted = trimmed.toLowerCase();
-      return { path, visible: children.some((c) => c.replace(/\/+$/, "").toLowerCase() === wanted) };
+      const grandparent = parent === "/" ? "/" : parent.slice(0, parent.lastIndexOf("/")) || "/";
+      const [siblings, parentSiblings] = await Promise.all([
+        arr.listFolders(parent),
+        parent === "/" ? Promise.resolve<string[]>([]) : arr.listFolders(grandparent),
+      ]);
+      const has = (list: string[], want: string) =>
+        list.some((c) => c.replace(/\/+$/, "").toLowerCase() === want.toLowerCase());
+      return {
+        path,
+        visible: has(siblings, trimmed),
+        // The root is always "visible"; otherwise the parent must list under its own parent.
+        parentVisible: parent === "/" || has(parentSiblings, parent),
+      };
     }));
   } catch {
     return undefined;

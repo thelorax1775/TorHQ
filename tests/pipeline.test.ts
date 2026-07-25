@@ -21,7 +21,7 @@ function healthy(service: ArrFlavor = "radarr", over: Partial<ArrSnapshot> = {})
     config: { enableCompletedDownloadHandling: true },
     rootFolders: [{ id: 1, path: "/mnt/storage/movies", accessible: true }],
     queue: [],
-    visiblePaths: [{ path: "/mnt/torrents/radarr", visible: true }],
+    visiblePaths: [{ path: "/mnt/torrents/radarr", visible: true, parentVisible: true }],
     ...over,
   };
 }
@@ -73,7 +73,7 @@ describe("download-client category", () => {
   ] as const)("reads %s's category from %s", (service, field) => {
     const arr = healthy(service, {
       downloadClients: [qbClient({ [field]: service })],
-      visiblePaths: [{ path: "/mnt/torrents/radarr", visible: true }],
+      visiblePaths: [{ path: "/mnt/torrents/radarr", visible: true, parentVisible: true }],
     });
     const check = find(run(arr), `qb-category-${service}`);
     expect(check.ok).toBe(true);
@@ -103,11 +103,11 @@ describe("download-client category", () => {
 describe("save-path visibility", () => {
   // The failure that produces no error anywhere: settings agree, the directory
   // simply is not mounted in the *arr's container.
-  it("fails, loudly, when the *arr cannot see the download directory", () => {
+  it("fails, loudly, when the download directory is not mounted at all", () => {
     const arr = healthy("radarr", {
       visiblePaths: [
-        { path: "/mnt/torrents/radarr", visible: false },
-        { path: "/mnt/torrents", visible: false },
+        { path: "/mnt/torrents/radarr", visible: false, parentVisible: false },
+        { path: "/mnt/torrents", visible: false, parentVisible: false },
       ],
     });
     const check = find(run(arr), "radarr-sees-save-path");
@@ -117,11 +117,26 @@ describe("save-path visibility", () => {
     expect(check.fix).toContain("pct set");
   });
 
-  it("fails when only one of several paths is missing", () => {
+  // Regression: a category's save path only exists once a torrent lands in it,
+  // so a freshly-created category looked exactly like an unmounted volume.
+  it("passes when a category directory does not exist yet but its parent is visible", () => {
     const arr = healthy("radarr", {
       visiblePaths: [
-        { path: "/mnt/torrents/radarr", visible: true },
-        { path: "/mnt/torrents2", visible: false },
+        { path: "/mnt/torrents", visible: true, parentVisible: true },
+        { path: "/mnt/torrents/radarr", visible: false, parentVisible: true },
+      ],
+    });
+    const check = find(run(arr), "radarr-sees-save-path");
+    expect(check.ok).toBe(true);
+    expect(check.detail).toContain("does not exist yet");
+    expect(check.detail).toContain("/mnt/torrents/radarr");
+  });
+
+  it("still fails when one path is genuinely unmounted among others that are fine", () => {
+    const arr = healthy("radarr", {
+      visiblePaths: [
+        { path: "/mnt/torrents/radarr", visible: true, parentVisible: true },
+        { path: "/mnt/torrents2", visible: false, parentVisible: false },
       ],
     });
     const check = find(run(arr), "radarr-sees-save-path");
