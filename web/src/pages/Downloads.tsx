@@ -12,7 +12,7 @@ import { useMutation } from "../lib/useMutation.js";
 import { usePolled } from "../lib/usePolled.js";
 import { bytes, eta as fmtEta, percent, speed, ago, plural } from "../lib/format.js";
 import {
-  Alert, Async, Badge, Button, Card, Checkbox, ConfirmDialog, EmptyState, PageHeader,
+  Alert, Async, Badge, Button, Card, ConfirmDialog, EmptyState, PageHeader,
   ProgressBar, RefreshButton, StaleNotice, Stat, TableWrap, type Tone,
 } from "../components/ui.js";
 import { Icon } from "../components/Icon.js";
