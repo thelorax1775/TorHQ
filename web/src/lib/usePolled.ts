@@ -78,6 +78,18 @@ function fetchEntry(key: string): Promise<void> {
   return e.inflight;
 }
 
+/**
+ * Global multiplier on every poll interval, set from the user's preferences.
+ * Manual refreshes and mutation invalidations ignore it — it only stretches the
+ * background cadence, for slow stacks or an always-on wall display.
+ */
+let pollRate = 1;
+
+export function setPollRate(n: number): void {
+  pollRate = Number.isFinite(n) && n >= 1 ? Math.min(n, 20) : 1;
+  for (const e of entries.values()) if (e.listeners.size) schedule(e);
+}
+
 /** Chained timeout (not setInterval) so a slow response never stacks requests. */
 function schedule(e: Entry): void {
   if (e.timer) { clearTimeout(e.timer); e.timer = null; }
@@ -86,7 +98,7 @@ function schedule(e: Entry): void {
   let min = Infinity;
   for (const ms of e.listeners.values()) if (ms > 0 && ms < min) min = ms;
   if (!isFinite(min)) return;
-  e.timer = setTimeout(() => { void fetchEntry(e.key); }, Math.max(1000, min));
+  e.timer = setTimeout(() => { void fetchEntry(e.key); }, Math.max(1000, min * pollRate));
 }
 
 function subscribe(key: string, intervalMs: number, listener: () => void): () => void {

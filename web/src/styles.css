@@ -79,36 +79,37 @@
   --content-max: 1440px;
 }
 
-/* §1.2 Light theme */
-@media (prefers-color-scheme: light) {
-  :root {
-    color-scheme: light;
-    --bg: #f5f7fb;
-    --bg-sunken: #eaeef5;
-    --surface: #ffffff;
-    --surface-2: #f2f5fa;
-    --surface-3: #e6ecf5;
-    --border: #dfe5ee;
-    --border-strong: #c3ccdb;
-    --text: #131922;
-    --text-muted: #57657a;
-    --text-dim: #7d8a9c;
-    --accent: #1668d8;
-    --accent-strong: #0f57ba;
-    --accent-fg: #ffffff;
-    --accent-soft: rgba(22, 104, 216, 0.1);
-    --ok: #1a7f37;
-    --ok-soft: rgba(26, 127, 55, 0.11);
-    --warn: #9a6700;
-    --warn-soft: rgba(154, 103, 0, 0.12);
-    --err: #cf222e;
-    --err-soft: rgba(207, 34, 46, 0.1);
-    --info: #4b53c4;
-    --info-soft: rgba(75, 83, 196, 0.11);
-    --e1: 0 1px 2px rgba(20, 30, 50, 0.08);
-    --e2: 0 6px 18px -6px rgba(20, 30, 50, 0.18);
-    --e3: 0 24px 50px -14px rgba(20, 30, 50, 0.28);
-  }
+/* §1.2 Light theme.
+   Stamped as `data-theme="light"` on <html> by applyPrefs() at boot, which
+   resolves the "system" preference against the OS and keeps tracking it. One
+   palette definition, so light and dark can never drift apart. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f5f7fb;
+  --bg-sunken: #eaeef5;
+  --surface: #ffffff;
+  --surface-2: #f2f5fa;
+  --surface-3: #e6ecf5;
+  --border: #dfe5ee;
+  --border-strong: #c3ccdb;
+  --text: #131922;
+  --text-muted: #57657a;
+  --text-dim: #7d8a9c;
+  --accent: #1668d8;
+  --accent-strong: #0f57ba;
+  --accent-fg: #ffffff;
+  --accent-soft: rgba(22, 104, 216, 0.1);
+  --ok: #1a7f37;
+  --ok-soft: rgba(26, 127, 55, 0.11);
+  --warn: #9a6700;
+  --warn-soft: rgba(154, 103, 0, 0.12);
+  --err: #cf222e;
+  --err-soft: rgba(207, 34, 46, 0.1);
+  --info: #4b53c4;
+  --info-soft: rgba(75, 83, 196, 0.11);
+  --e1: 0 1px 2px rgba(20, 30, 50, 0.08);
+  --e2: 0 6px 18px -6px rgba(20, 30, 50, 0.18);
+  --e3: 0 24px 50px -14px rgba(20, 30, 50, 0.28);
 }
 
 /* --------------------------------------------------------------------------
