@@ -20,7 +20,12 @@ const SlskdExtra = z.object({
 
 // Torrent-index scraper: all site-specific knobs so a rotting mirror can be
 // re-pointed without a code change. Empty/omitted fields fall back to the
-// adapter's KAT-style defaults. `flaresolverrUrl` is optional Cloudflare bypass.
+// adapter's KAT-style defaults.
+//
+// `flaresolverrUrl` points at any FlareSolverr-compatible challenge solver —
+// FlareSolverr itself, or a drop-in like Byparr that speaks the same /v1 API.
+// The key keeps its original name so existing configs keep working; what it
+// names is the protocol, not the implementation.
 const TorrentSearchExtra = z.object({
   searchPath: z.string().max(256).optional(),
   rowSelector: z.string().max(256).optional(),
@@ -32,6 +37,11 @@ const TorrentSearchExtra = z.object({
   detailLinkSelector: z.string().max(256).optional(),
   magnetOnDetailPage: z.coerce.boolean().optional(),
   flaresolverrUrl: z.string().url().max(512).optional(),
+  // How long to let the solver work before giving up. FlareSolverr answered
+  // within a minute or failed; a browser-driving solver like Byparr routinely
+  // needs longer on a cold start, so the old fixed 60s cut off solves that
+  // would have succeeded.
+  solverTimeoutMs: z.coerce.number().int().min(10_000).max(300_000).optional(),
 });
 
 // Prowlarr is TorHQ's primary search backend: it already aggregates every

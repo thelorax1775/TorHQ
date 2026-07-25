@@ -108,7 +108,20 @@ const EXTRA_FIELDS: Partial<Record<string, ExtraField[]>> = {
     { key: "leechersSelector", kind: "text", label: "Leechers selector", placeholder: "td.red.center" },
     { key: "sizeSelector", kind: "text", label: "Size selector", placeholder: "td.nobr.center" },
     { key: "detailLinkSelector", kind: "text", label: "Detail-link selector", placeholder: "a.cellMainLink" },
-    { key: "flaresolverrUrl", kind: "text", label: "FlareSolverr URL (optional, clears Cloudflare)", placeholder: "http://127.0.0.1:8191" },
+    {
+      key: "flaresolverrUrl",
+      kind: "text",
+      label: "Cloudflare solver URL (optional)",
+      placeholder: "http://127.0.0.1:8191",
+      hint: "Byparr, or anything else speaking FlareSolverr's /v1 API. FlareSolverr itself no longer clears current Cloudflare challenges — it detects them and times out — so Byparr is the one to point this at.",
+    },
+    {
+      key: "solverTimeoutMs",
+      kind: "number",
+      label: "Solver timeout (ms)",
+      placeholder: "120000",
+      hint: "How long to let the solver work. Blank uses 120000 — a solver that drives a real browser regularly needs more than a minute on a cold start.",
+    },
     { key: "magnetOnDetailPage", kind: "checkbox", label: "Magnets are on each result's detail page (not the search results page)" },
   ],
   websearch: [

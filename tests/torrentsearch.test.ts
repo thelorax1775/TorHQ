@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  parseSearchResults, parseSize, DEFAULT_PROFILE,
+  parseSearchResults, parseSize, solverEndpoint, DEFAULT_PROFILE,
 } from "../server/src/adapters/torrentsearch.js";
 
 // A trimmed-down but structurally faithful KickassTorrents-style results page.
@@ -84,5 +84,18 @@ describe("parseSize", () => {
     expect(parseSize(undefined)).toBeNull();
     expect(parseSize("")).toBeNull();
     expect(parseSize("lots")).toBeNull();
+  });
+});
+
+describe("solverEndpoint", () => {
+  // The solver URL is typed by hand into a config field, so both forms turn up.
+  // Joining them wrongly POSTs to the wrong path and reads as "solver broken".
+  it("appends /v1 whether or not the base URL ends in a slash", () => {
+    expect(solverEndpoint("http://192.168.10.144:8191")).toBe("http://192.168.10.144:8191/v1");
+    expect(solverEndpoint("http://192.168.10.144:8191/")).toBe("http://192.168.10.144:8191/v1");
+  });
+
+  it("keeps a path prefix, for a solver behind a reverse proxy", () => {
+    expect(solverEndpoint("https://solver.example.com/byparr/")).toBe("https://solver.example.com/byparr/v1");
   });
 });

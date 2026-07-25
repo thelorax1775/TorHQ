@@ -218,10 +218,22 @@ adjust a selector — no code change needed**.
 
 If a mirror is behind a Cloudflare browser challenge, a plain server-side fetch
 gets blocked; TorHQ surfaces a clear error rather than failing silently. Set an
-optional **FlareSolverr URL** in the same config to route fetches through
-[FlareSolverr](https://github.com/FlareSolverr/FlareSolverr) and clear the
-challenge. Be aware that current Cloudflare challenges defeat FlareSolverr on
-many sites — when that happens the honest answer is to use Prowlarr instead.
+optional **Cloudflare solver URL** in the same config to route fetches through a
+challenge solver.
+
+Any service speaking FlareSolverr's `/v1` API works, but the choice matters:
+
+- **[Byparr](https://github.com/ThePhaseless/Byparr)** — use this. It drives a
+  real browser and clears the challenges that currently stop everything else.
+- **[FlareSolverr](https://github.com/FlareSolverr/FlareSolverr)** — the original,
+  and the reason the config key is still `flaresolverrUrl`. It no longer clears
+  current Cloudflare challenges: it detects them and then times out, on every
+  attempt, regardless of browser version or headless setting.
+
+Because a browser-driving solver is slow to start, the solver timeout defaults
+to **120 s** (`solverTimeoutMs`, 10–300 s). TorHQ's own socket timeout sits above
+the solver's deadline on purpose, so a failed solve returns the solver's own
+explanation instead of an aborted connection.
 
 ### The web widget
 
@@ -336,7 +348,8 @@ tells you.
    - Navidrome — `username:password`
    - Kavita — API key (optionally set a **library ID** to trigger explicit scans)
    - torrentsearch — no secret; set the base URL to a torrent-index mirror and,
-     if needed, override the site-profile selectors / add a FlareSolverr URL
+     if needed, override the site-profile selectors / add a Cloudflare solver URL
+     (Byparr — see [the torrent site source](#configuring-a-mirror-and-why-its-fragile))
    - websearch — no secret for the default link-out provider. For real Google
      results the cheapest setup is provider `widget` with just a `cx` from
      programmablesearchengine.google.com; provider `google` additionally needs an

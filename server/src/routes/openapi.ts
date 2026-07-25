@@ -92,7 +92,9 @@ export const openApiDoc = {
             description:
               "Typed per-kind config. kavita: { libraryId }. slskd: { webhookToken } (write-only). " +
               "torrentsearch: { searchPath, rowSelector, titleSelector, magnetSelector, seedersSelector, " +
-              "leechersSelector, sizeSelector, detailLinkSelector, magnetOnDetailPage, flaresolverrUrl }.",
+              "leechersSelector, sizeSelector, detailLinkSelector, magnetOnDetailPage, flaresolverrUrl, " +
+              "solverTimeoutMs }. `flaresolverrUrl` names the FlareSolverr /v1 protocol, not the " +
+              "implementation — point it at Byparr or any other drop-in that speaks it.",
           },
         },
       },

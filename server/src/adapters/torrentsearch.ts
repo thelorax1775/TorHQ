@@ -9,8 +9,10 @@ import type { AdapterConfig, HealthResult, ServiceAdapter } from "./types.js";
  * "unblock" proxy mirrors rot constantly (domain changes, markup drift, Cloudflare
  * challenges). So this adapter is **configuration-driven, not hardcoded**: the base
  * URL, the search-path template, and every CSS selector live in the service's
- * `extra` config and can be changed without touching code. An optional FlareSolverr
- * URL lets it get through Cloudflare's browser check when a mirror requires it.
+ * `extra` config and can be changed without touching code. An optional solver URL
+ * lets it get through Cloudflare's browser check when a mirror requires it: any
+ * service speaking FlareSolverr's `/v1` API will do — FlareSolverr itself, or a
+ * drop-in such as Byparr, which clears challenges FlareSolverr no longer can.
  *
  * It only *reads* search pages and extracts magnet links. Pushing a magnet to a
  * download client is a separate, explicit action (see the qBittorrent adapter and
@@ -56,12 +58,21 @@ const BROWSER_UA =
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36";
 const MAX_HTML_BYTES = 4 * 1024 * 1024;
 const MAX_DETAIL_FETCHES = 10; // cap the N+1 when magnets are only on detail pages
+/**
+ * Two minutes, because a browser-driving solver needs it. FlareSolverr either
+ * answered inside a minute or failed, so 60s used to be plenty; Byparr launches
+ * a real browser per challenge and a cold one regularly runs past that.
+ */
+const DEFAULT_SOLVER_TIMEOUT_MS = 120_000;
+/** Let the solver's own deadline expire first, so we get its error, not a hang-up. */
+const SOLVER_GRACE_MS = 5_000;
 
 export class TorrentSearchAdapter implements ServiceAdapter {
   readonly kind = "torrentsearch";
   readonly status = "functional" as const;
   private readonly profile: SiteProfile;
   private readonly flaresolverrUrl: string | null;
+  private readonly solverTimeoutMs: number;
 
   constructor(private cfg: AdapterConfig) {
     const extra = (cfg.extra ?? {}) as Record<string, unknown>;
@@ -77,6 +88,7 @@ export class TorrentSearchAdapter implements ServiceAdapter {
       magnetOnDetailPage: extra.magnetOnDetailPage === true,
     };
     this.flaresolverrUrl = str(extra.flaresolverrUrl) ?? null;
+    this.solverTimeoutMs = num(extra.solverTimeoutMs) ?? DEFAULT_SOLVER_TIMEOUT_MS;
   }
 
   async health(): Promise<HealthResult> {
@@ -133,7 +145,7 @@ export class TorrentSearchAdapter implements ServiceAdapter {
 
   private async fetchHtml(url: string): Promise<string> {
     const html = this.flaresolverrUrl
-      ? await this.fetchViaFlaresolverr(url)
+      ? await this.fetchViaSolver(url)
       : await this.fetchDirect(url);
     assertNotChallenge(html, url);
     return html;
@@ -150,29 +162,36 @@ export class TorrentSearchAdapter implements ServiceAdapter {
     const text = await readCapped(res.body);
     if (res.statusCode >= 400) {
       const hint = res.statusCode === 403 || res.statusCode === 503
-        ? " (likely a Cloudflare block — set a FlareSolverr URL in this service's config)"
+        ? " (likely a Cloudflare block — set a solver URL in this service's config)"
         : "";
       throw new Error(`torrent site returned HTTP ${res.statusCode}${hint}`);
     }
     return text;
   }
 
-  /** Route the fetch through FlareSolverr to clear a Cloudflare browser challenge. */
-  private async fetchViaFlaresolverr(url: string): Promise<string> {
-    const endpoint = new URL("v1", this.flaresolverrUrl!.endsWith("/") ? this.flaresolverrUrl! : this.flaresolverrUrl! + "/").toString();
-    const res = await request(endpoint, {
+  /**
+   * Route the fetch through the challenge solver. The wire format is
+   * FlareSolverr's `/v1`, which Byparr and the other drop-ins also implement, so
+   * this speaks to whichever one the URL points at.
+   *
+   * Our own socket timeouts sit above the solver's own budget: the solver
+   * answers a timed-out solve with a JSON error explaining what it was doing,
+   * and that is worth far more than an aborted socket.
+   */
+  private async fetchViaSolver(url: string): Promise<string> {
+    const res = await request(solverEndpoint(this.flaresolverrUrl!), {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ cmd: "request.get", url, maxTimeout: 60000 }),
-      headersTimeout: 65000,
-      bodyTimeout: 65000,
+      body: JSON.stringify({ cmd: "request.get", url, maxTimeout: this.solverTimeoutMs }),
+      headersTimeout: this.solverTimeoutMs + SOLVER_GRACE_MS,
+      bodyTimeout: this.solverTimeoutMs + SOLVER_GRACE_MS,
     });
     const text = await readCapped(res.body);
-    if (res.statusCode >= 400) throw new Error(`FlareSolverr returned HTTP ${res.statusCode}`);
+    if (res.statusCode >= 400) throw new Error(`the challenge solver returned HTTP ${res.statusCode}`);
     let parsed: any;
-    try { parsed = JSON.parse(text); } catch { throw new Error("FlareSolverr returned a non-JSON response"); }
+    try { parsed = JSON.parse(text); } catch { throw new Error("the challenge solver returned a non-JSON response"); }
     if (parsed?.status !== "ok" || typeof parsed?.solution?.response !== "string") {
-      throw new Error(`FlareSolverr could not fetch the page: ${parsed?.message ?? "unknown error"}`);
+      throw new Error(`the challenge solver could not fetch the page: ${parsed?.message ?? "unknown error"}`);
     }
     return parsed.solution.response as string;
   }
@@ -217,6 +236,20 @@ function absolutizeSameOrigin(href: string, baseUrl: string): string | null {
 
 // --- helpers ---------------------------------------------------------------
 
+/**
+ * Build the solver's `/v1` endpoint from a configured base URL, tolerating both
+ * `http://host:8191` and `http://host:8191/`. Getting this wrong silently POSTs
+ * to the wrong path and reads as "the solver is broken".
+ */
+export function solverEndpoint(baseUrl: string): string {
+  return new URL("v1", baseUrl.endsWith("/") ? baseUrl : baseUrl + "/").toString();
+}
+
+function num(v: unknown): number | undefined {
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() !== "" ? v.trim() : undefined;
 }
@@ -260,6 +293,6 @@ function assertNotChallenge(html: string, url: string): void {
   const markers = ["Just a moment", "cf-browser-verification", "Attention Required! | Cloudflare", "Checking your browser before"];
   const lower = html.slice(0, 4000);
   if (markers.some((m) => lower.includes(m))) {
-    throw new Error(`blocked by an anti-bot challenge at ${url} — configure a FlareSolverr URL or try another mirror`);
+    throw new Error(`blocked by an anti-bot challenge at ${url} — configure a solver URL or try another mirror`);
   }
 }
