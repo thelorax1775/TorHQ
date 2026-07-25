@@ -1,11 +1,15 @@
 import { request } from "undici";
-import { httpJson } from "./http.js";
+import { httpJson, HttpError } from "./http.js";
 import type { AdapterConfig, HealthResult, ServiceAdapter } from "./types.js";
 
 /**
  * qBittorrent WebUI API v2. FUNCTIONAL: cookie login, torrent list by category,
- * transfer info, and category management. TorHQ observes torrents; it NEVER
- * moves/renames Radarr/Sonarr/Lidarr downloads (that would break their import).
+ * transfer info, category management, and torrent control (pause/resume/
+ * recheck/priority/category/delete).
+ *
+ * Control stops at the download client. TorHQ NEVER moves or renames
+ * Radarr/Sonarr/Lidarr media — `deleteWithFiles` removes only the payload
+ * qBittorrent itself still owns, and is always an explicit user action.
  */
 export interface QbTorrent {
   hash: string;
@@ -17,6 +21,11 @@ export interface QbTorrent {
   upspeed: number;
   size: number;
   eta: number;
+  savePath: string;
+  ratio: number;
+  /** Unix seconds, as qBittorrent reports it. */
+  addedOn: number;
+  tags: string[];
 }
 
 export class QbittorrentAdapter implements ServiceAdapter {
@@ -70,6 +79,9 @@ export class QbittorrentAdapter implements ServiceAdapter {
     return list.map((t) => ({
       hash: t.hash, name: t.name, category: t.category, state: t.state,
       progress: t.progress, dlspeed: t.dlspeed, upspeed: t.upspeed, size: t.size, eta: t.eta,
+      savePath: t.save_path ?? "", ratio: t.ratio ?? 0, addedOn: t.added_on ?? 0,
+      // `tags` is a comma-separated string on the wire; an empty string means none.
+      tags: String(t.tags ?? "").split(",").map((s) => s.trim()).filter(Boolean),
     }));
   }
 
@@ -79,6 +91,11 @@ export class QbittorrentAdapter implements ServiceAdapter {
 
   async categories(): Promise<Record<string, { name: string; savePath: string }>> {
     return this.authed("/api/v2/torrents/categories");
+  }
+
+  /** Application preferences; `save_path` is the default download directory. */
+  async preferences(): Promise<Record<string, unknown> & { save_path?: string }> {
+    return this.authed("/api/v2/app/preferences");
   }
 
   /** Ensure ownership-distinguishing categories exist (radarr/sonarr/torhq-*). */
@@ -103,6 +120,75 @@ export class QbittorrentAdapter implements ServiceAdapter {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Torrent control. Every one of these is an explicit, user-initiated action on
+  // the download client; none of them touch an *arr root folder.
+  // ---------------------------------------------------------------------------
+
+  /** Stop the given torrents. */
+  async pause(hashes: string[]): Promise<void> {
+    await this.torrentPost("pause", { hashes: hashList(hashes) }, "stop");
+  }
+
+  /** Start the given torrents. */
+  async resume(hashes: string[]): Promise<void> {
+    await this.torrentPost("resume", { hashes: hashList(hashes) }, "start");
+  }
+
+  /** Force a hash re-check of the data already on disk. */
+  async recheck(hashes: string[]): Promise<void> {
+    await this.torrentPost("recheck", { hashes: hashList(hashes) });
+  }
+
+  /** Remove the torrents from qBittorrent but leave the downloaded data alone. */
+  async delete(hashes: string[]): Promise<void> {
+    await this.torrentPost("delete", { hashes: hashList(hashes), deleteFiles: "false" });
+  }
+
+  /**
+   * Remove the torrents AND the data qBittorrent downloaded for them. Destructive
+   * and deliberately separate from `delete`: callers must have an explicit user
+   * confirmation and must log it to the activity feed. This only ever removes
+   * files inside qBittorrent's own save path — media an *arr has already imported
+   * lives in that *arr's root folder and is never touched here.
+   */
+  async deleteWithFiles(hashes: string[]): Promise<void> {
+    await this.torrentPost("delete", { hashes: hashList(hashes), deleteFiles: "true" });
+  }
+
+  /** Move to the front of the queue (qBittorrent queueing must be enabled). */
+  async topPriority(hashes: string[]): Promise<void> {
+    await this.torrentPost("topPrio", { hashes: hashList(hashes) });
+  }
+
+  /** Move to the back of the queue. */
+  async bottomPriority(hashes: string[]): Promise<void> {
+    await this.torrentPost("bottomPrio", { hashes: hashList(hashes) });
+  }
+
+  /**
+   * Re-tag ownership. Changing a torrent's category is how a mis-tagged grab is
+   * handed to the right *arr; qBittorrent may also relocate the data into the
+   * category's save path, which is qBittorrent's own bookkeeping, not an import.
+   */
+  async setCategory(hashes: string[], category: string): Promise<void> {
+    await this.torrentPost("setCategory", { hashes: hashList(hashes), category });
+  }
+
+  /**
+   * POST to /api/v2/torrents/<action>. qBittorrent 5 renamed pause/resume to
+   * stop/start; when the primary name 404s we retry the modern alias once so the
+   * adapter works against both generations.
+   */
+  private async torrentPost(action: string, fields: Record<string, string>, alias?: string): Promise<void> {
+    try {
+      await this.postForm(`api/v2/torrents/${action}`, fields);
+    } catch (e) {
+      if (!alias || !(e instanceof HttpError) || e.statusCode !== 404) throw e;
+      await this.postForm(`api/v2/torrents/${alias}`, fields);
+    }
+  }
+
   /** POST an x-www-form-urlencoded body to an authed endpoint, re-logging in once. */
   private async postForm(path: string, fields: Record<string, string>): Promise<string> {
     if (!this.cookie) await this.login();
@@ -120,7 +206,14 @@ export class QbittorrentAdapter implements ServiceAdapter {
       res = await send();
     }
     const text = await res.body.text();
-    if (res.statusCode >= 400) throw new Error(`qBittorrent HTTP ${res.statusCode} for ${path}`);
+    if (res.statusCode >= 400) {
+      throw new HttpError(`qBittorrent HTTP ${res.statusCode} for ${path}`, res.statusCode, text.slice(0, 500));
+    }
     return text;
   }
+}
+
+/** qBittorrent takes a batch of torrents as a `|`-separated hash list. */
+function hashList(hashes: string[]): string {
+  return hashes.join("|");
 }
