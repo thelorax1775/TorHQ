@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ArrAdapter, ArrFlavor, ArrParseResult } from "../server/src/adapters/arr.js";
 import type { GeminiAdapter, ReleaseGuess } from "../server/src/adapters/gemini.js";
-import { identifyRelease, cachedIdentify, resetIdentifyCache } from "../server/src/lib/identify.js";
+import {
+  identifyRelease, cachedIdentify, resetIdentifyCache, plausibleMatch,
+} from "../server/src/lib/identify.js";
 
 /**
  * A stand-in *arr. Only the two methods the ladder uses are real; anything else
@@ -176,5 +178,77 @@ describe("the identification cache", () => {
     });
     const second = await cachedIdentify("Thing.2020", { arrs: { radarr: up }, gemini: null });
     expect(second.libraryId).toBe(7);
+  });
+});
+
+describe("plausibleMatch — a lookup's best effort is not automatically an answer", () => {
+  it("accepts an exact or subtitle-extended match", () => {
+    expect(plausibleMatch("Dune Part Two", "Dune: Part Two")).toBe(true);
+    expect(plausibleMatch("Dune", "Dune: Part Two")).toBe(true);
+    expect(plausibleMatch("Avengers Endgame", "Avengers: Endgame")).toBe(true);
+  });
+
+  it("rejects the real over-eager parses found against the live stack", () => {
+    // Sonarr parses ANY string as a series title, so these all arrived looking
+    // like clean answers with a one-click "add to library" button.
+    expect(plausibleMatch("Ubuntu", "Rebellion!")).toBe(false);
+    expect(plausibleMatch("brba complete", "You Complete Me")).toBe(false);
+    expect(plausibleMatch("OK Computer Radiohead", "OK")).toBe(false);
+  });
+
+  it("is not fooled by one incidental word in common", () => {
+    expect(plausibleMatch("The Matrix", "The Notebook")).toBe(false);
+  });
+
+  it("has no opinion when either side has no usable tokens", () => {
+    expect(plausibleMatch("", "Dune")).toBe(false);
+    expect(plausibleMatch("Dune", "")).toBe(false);
+    expect(plausibleMatch("!!! ???", "Dune")).toBe(false);
+  });
+});
+
+describe("the ladder does not stop on a parse that matched nothing", () => {
+  it("falls through to Gemini when the parse produced no plausible candidate", async () => {
+    // The Ubuntu case: Sonarr parses it, its lookup returns something unrelated,
+    // and the gate rejects it. Stopping there would present junk as an answer.
+    const sonarr = fakeArr("sonarr", {
+      parse: parsed({ service: "sonarr", title: "Ubuntu" }),
+      candidates: [{ selectionId: "tvdb:1", title: "Rebellion!" }],
+    });
+    const gemini = fakeGemini(null); // honestly declines: it is a Linux ISO
+
+    const id = await identifyRelease("Ubuntu.24.04.LTS.desktop.amd64.iso", { arrs: { sonarr }, gemini });
+
+    expect(gemini.identify).toHaveBeenCalledOnce();
+    expect(id.source).toBe("none");
+    expect(id.candidates).toEqual([]);
+    // The rejected parse survives as context, so the explanation is not a shrug.
+    expect(id.detail).toMatch(/Ubuntu/);
+    expect(id.detail).toMatch(/matched nothing/);
+  });
+
+  it("lets Gemini rescue a name the parser read wrongly", async () => {
+    const lidarr = fakeArr("lidarr", {
+      parse: parsed({ service: "lidarr", title: "OK Computer Radiohead" }),
+      candidates: [{ selectionId: "mbid:x", title: "Radiohead" }],
+    });
+    const id = await identifyRelease("OK.Computer.Radiohead.discography.FLAC", {
+      arrs: { lidarr },
+      gemini: fakeGemini({ kind: "music", title: "Radiohead", confidence: 0.9 }),
+    });
+    // The parse's own term found nothing plausible; Gemini's term did.
+    expect(id.source).toBe("gemini");
+    expect(id.candidates[0].title).toBe("Radiohead");
+  });
+
+  it("still prefers the parse when its lookup DID corroborate it", async () => {
+    const radarr = fakeArr("radarr", {
+      parse: parsed({ service: "radarr", title: "Dune Part Two", year: 2024 }),
+      candidates: [{ selectionId: "tmdb:693134", title: "Dune: Part Two", year: 2024 }],
+    });
+    const gemini = fakeGemini({ kind: "movie", title: "nope", confidence: 1 });
+    const id = await identifyRelease("Dune.Part.Two.2024", { arrs: { radarr }, gemini });
+    expect(id.source).toBe("arr-parse");
+    expect(gemini.identify).not.toHaveBeenCalled();
   });
 });

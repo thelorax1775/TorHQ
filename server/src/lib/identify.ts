@@ -94,16 +94,79 @@ function lookupTerm(title: string, year?: number): string {
   return year ? `${title} ${year}` : title;
 }
 
+/** Comparable word tokens; punctuation and single characters carry no signal. */
+function tokens(s: string): string[] {
+  return s.toLowerCase().split(/[^a-z0-9]+/i).filter((t) => t.length > 1);
+}
+
+/**
+ * Does this candidate plausibly correspond to the title we searched for?
+ *
+ * This gate exists because **an *arr's parser succeeding is not the same as it
+ * being right.** Sonarr will parse literally any string as a series title, so
+ * `Ubuntu.24.04.LTS.desktop.amd64.iso` parses cleanly to "Ubuntu", whose lookup
+ * then returns an unrelated show. Presented without this check, that arrived
+ * with the same confidence as a real match and a one-click button to add it —
+ * which is how a Linux ISO ends up filed as somebody's TV series.
+ *
+ * The rule: most of what we searched for must actually appear in the candidate.
+ * Substring containment covers subtitle differences ("Dune" → "Dune: Part Two"),
+ * and the token ratio rejects an incidental single-word overlap
+ * ("brba complete" → "You Complete Me").
+ */
+export function plausibleMatch(searched: string, candidate: string): boolean {
+  const a = tokens(searched);
+  const b = tokens(candidate);
+  if (!a.length || !b.length) return false;
+
+  // Containment only counts in one direction. A candidate that EXTENDS the
+  // search is a match ("Dune" -> "Dune: Part Two"); a candidate CONTAINED in
+  // the search is not, or every long term would match its own shortest word --
+  // which is exactly how "OK Computer Radiohead" matched an album called "OK".
+  const an = a.join(" ");
+  const bn = b.join(" ");
+  if (an === bn || bn.includes(an)) return true;
+
+  const shared = a.filter((t) => b.includes(t)).length;
+  return shared / a.length >= 0.6;
+}
+
+interface LookupOutcome {
+  candidates: ArrCandidateWithService[];
+  /**
+   * The lookup could not be performed at all. Distinct from "returned nothing
+   * plausible": a service being down is transient and says nothing about
+   * whether the parse was right, so it must not be read as evidence against it.
+   */
+  failed: boolean;
+}
+
+/**
+ * @param query  what to ASK the *arr -- the title plus the year, because the
+ *               year materially improves the lookup.
+ * @param title  what to COMPARE against -- the bare title. A candidate's title
+ *               does not contain the year, so scoring against the query would
+ *               penalise every year-bearing search for a difference that is an
+ *               artefact of how we asked rather than of what came back.
+ */
 async function candidatesFor(
-  arr: ArrAdapter | undefined, service: ArrFlavor, term: string,
-): Promise<ArrCandidateWithService[]> {
-  if (!arr) return [];
+  arr: ArrAdapter | undefined, service: ArrFlavor, query: string, title: string,
+): Promise<LookupOutcome> {
+  if (!arr) return { candidates: [], failed: true };
   try {
-    return (await arr.searchCandidates(term)).slice(0, 8).map((c) => ({ ...c, service }));
+    const raw = await arr.searchCandidates(query);
+    // Only candidates that plausibly ARE the thing we searched for. A lookup
+    // always returns its best effort, and its best effort for a nonsense term
+    // is nonsense -- which must not reach the user looking like an answer.
+    return {
+      candidates: raw
+        .filter((c) => plausibleMatch(title, c.title))
+        .slice(0, 8)
+        .map((c) => ({ ...c, service })),
+      failed: false,
+    };
   } catch {
-    // A failed lookup weakens the answer; it does not invalidate the parse that
-    // produced the term, which is still worth showing.
-    return [];
+    return { candidates: [], failed: true };
   }
 }
 
@@ -144,45 +207,61 @@ export async function identifyRelease(
   }
 
   const readable = parsed.find((p) => p.title.trim());
+  let parseNote = "";
   if (readable) {
     // Parsed, but not in the library — the parsed title is a good lookup term.
     const term = lookupTerm(readable.title, readable.year);
-    const candidates = await candidatesFor(deps.arrs[readable.service], readable.service, term);
-    return {
-      release, source: "arr-parse", service: readable.service,
-      title: readable.title,
-      year: readable.year,
-      seasonNumber: readable.seasonNumber,
-      libraryId: null,
-      candidates,
-      // Read cleanly, but nothing has confirmed which work it is yet.
-      confidence: candidates.length ? 0.7 : 0.4,
-      detail: candidates.length
-        ? `${readable.service} parsed this as "${term}" — not in your library yet`
-        : `${readable.service} parsed this as "${term}", but its lookup returned nothing`,
-    };
+    const { candidates, failed } = await candidatesFor(deps.arrs[readable.service], readable.service, term, readable.title);
+    if (failed) {
+      // Nothing corroborated the parse, but nothing contradicted it either.
+      // Report it, plainly weaker, rather than pretending it did not happen.
+      return {
+        release, source: "arr-parse", service: readable.service,
+        title: readable.title, year: readable.year, seasonNumber: readable.seasonNumber,
+        libraryId: null, candidates: [], confidence: 0.4,
+        detail: `${readable.service} parsed this as "${term}", but its lookup returned nothing`,
+      };
+    }
+    if (candidates.length) {
+      return {
+        release, source: "arr-parse", service: readable.service,
+        title: readable.title,
+        year: readable.year,
+        seasonNumber: readable.seasonNumber,
+        libraryId: null,
+        candidates,
+        // Read cleanly and corroborated by a real lookup hit, but nothing has
+        // yet confirmed WHICH of them it is — that is the user's call.
+        confidence: 0.7,
+        detail: `${readable.service} parsed this as "${term}" — not in your library yet`,
+      };
+    }
+    // A parse with no plausible candidate is not an answer. Sonarr parses any
+    // string at all, so stopping here would present junk; carry on down the
+    // ladder instead, and keep the parse only as context for the explanation.
+    parseNote = ` (${readable.service} read it as "${term}", which matched nothing)`;
   }
 
   // --- 3. Gemini, and only now --------------------------------------------
   if (!deps.gemini) {
-    return unidentified(release, "no *arr could parse this name, and Gemini is not configured");
+    return unidentified(release, `no *arr could identify this name${parseNote}, and Gemini is not configured`);
   }
 
   let guess;
   try {
     guess = await deps.gemini.identify(name);
   } catch (e) {
-    return unidentified(release, `no *arr could parse this name, and Gemini failed: ${(e as Error).message}`);
+    return unidentified(release, `no *arr could identify this name${parseNote}, and Gemini failed: ${(e as Error).message}`);
   }
   if (!guess) {
-    return unidentified(release, "neither the *arr parsers nor Gemini could identify this");
+    return unidentified(release, `neither the *arr parsers nor Gemini could identify this${parseNote}`);
   }
 
   const service = KIND_TO_SERVICE[guess.kind];
   if (!service) return unidentified(release, "Gemini could not tell what kind of thing this is");
 
   const term = lookupTerm(guess.title, guess.year);
-  const candidates = await candidatesFor(deps.arrs[service], service, term);
+  const { candidates } = await candidatesFor(deps.arrs[service], service, term, guess.title);
   return {
     release, source: "gemini", service,
     title: guess.title,

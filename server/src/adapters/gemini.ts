@@ -1,5 +1,24 @@
-import { httpJson } from "./http.js";
+import { httpJson, HttpError } from "./http.js";
 import type { AdapterConfig, HealthResult, ServiceAdapter } from "./types.js";
+
+/**
+ * Google answers a bad request with a JSON body carrying the real reason —
+ * "models/x is not found for API version v1beta, or is not supported for
+ * generateContent". The HttpError message is only "HTTP 404 for <url>", which
+ * sends the reader hunting for a fault that Google has already named.
+ */
+export function geminiMessage(e: unknown): string {
+  if (e instanceof HttpError && e.body) {
+    try {
+      const parsed = JSON.parse(e.body) as { error?: { message?: string; status?: string } };
+      const msg = parsed.error?.message;
+      if (msg) return parsed.error?.status ? `${msg} (${parsed.error.status})` : msg;
+    } catch {
+      if (e.body.length < 300 && !e.body.trimStart().startsWith("<")) return e.body;
+    }
+  }
+  return e instanceof Error ? e.message : String(e);
+}
 
 /**
  * Google Gemini, used for exactly one job: turning a release name that the
@@ -126,7 +145,7 @@ export class GeminiAdapter implements ServiceAdapter {
       }
       return { healthy: true, version: this.model, detail: `${available.length} models available`, latencyMs };
     } catch (e) {
-      return { healthy: false, detail: (e as Error).message, latencyMs: Date.now() - start };
+      return { healthy: false, detail: geminiMessage(e), latencyMs: Date.now() - start };
     }
   }
 
@@ -136,6 +155,16 @@ export class GeminiAdapter implements ServiceAdapter {
    * report honestly, and is always preferable to a fabricated guess.
    */
   async identify(releaseName: string): Promise<ReleaseGuess | null> {
+    try {
+      return await this.generate(releaseName);
+    } catch (e) {
+      // Name the model: "not found for API version" is by far the most common
+      // failure here, and it is unactionable without knowing what was asked for.
+      throw new Error(`${this.model}: ${geminiMessage(e)}`);
+    }
+  }
+
+  private async generate(releaseName: string): Promise<ReleaseGuess | null> {
     const res = await httpJson<any>(
       this.baseUrl, `/v1beta/models/${encodeURIComponent(this.model)}:generateContent`,
       {
