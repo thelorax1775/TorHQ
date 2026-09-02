@@ -61,6 +61,63 @@ const DEFAULT_MODEL = "gemini-flash-latest";
 const DEFAULT_BASE = "https://generativelanguage.googleapis.com";
 
 /**
+ * Gemini's free tier limits requests per minute, and a page of search results
+ * can need many identifications at once. Firing them in parallel -- which is
+ * what the batch route naturally does -- earns an immediate 429 for all of
+ * them, so every call goes through this gate.
+ *
+ * Two at a time: enough that a page fills promptly, few enough that a free key
+ * survives it.
+ */
+const MAX_CONCURRENT = 2;
+let active = 0;
+const waiting: Array<() => void> = [];
+
+async function acquire(): Promise<void> {
+  if (active < MAX_CONCURRENT) { active++; return; }
+  await new Promise<void>((resolve) => waiting.push(resolve));
+  active++;
+}
+function release(): void {
+  active--;
+  waiting.shift()?.();
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Google's own advice on when to come back, when it offers one. */
+function retryDelayMs(e: unknown): number | null {
+  if (!(e instanceof HttpError) || !e.body) return null;
+  try {
+    const details = (JSON.parse(e.body) as any)?.error?.details;
+    for (const d of Array.isArray(details) ? details : []) {
+      const m = /^(\d+(?:\.\d+)?)s$/.exec(String(d?.retryDelay ?? ""));
+      const seconds = m?.[1] ? parseFloat(m[1]) : NaN;
+      if (Number.isFinite(seconds)) return Math.ceil(seconds * 1000);
+    }
+  } catch { /* not JSON; fall back to backoff */ }
+  return null;
+}
+
+/**
+ * Retry the transient refusals only. 429 (rate limited) and 503 (model
+ * overloaded) both mean "ask again shortly" and both were hit on the very first
+ * live run; everything else is a real fault and must surface immediately rather
+ * than being retried into a longer wait for the same error.
+ */
+async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
+  for (let i = 0; ; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      const status = e instanceof HttpError ? e.statusCode : 0;
+      if (i >= attempts - 1 || (status !== 429 && status !== 503)) throw e;
+      await sleep(retryDelayMs(e) ?? 1000 * 2 ** i);
+    }
+  }
+}
+
+/**
  * A response schema, so the model returns parseable JSON rather than prose with
  * a JSON block in it. `propertyOrdering` is not set: it affects only
  * presentation, and we read by key.
@@ -178,12 +235,15 @@ export class GeminiAdapter implements ServiceAdapter {
    * report honestly, and is always preferable to a fabricated guess.
    */
   async identify(releaseName: string): Promise<ReleaseGuess | null> {
+    await acquire();
     try {
-      return await this.generate(releaseName);
+      return await withRetry(() => this.generate(releaseName));
     } catch (e) {
       // Name the model: "not found for API version" is by far the most common
       // failure here, and it is unactionable without knowing what was asked for.
       throw new Error(`${this.model}: ${geminiMessage(e)}`);
+    } finally {
+      release();
     }
   }
 

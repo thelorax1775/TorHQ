@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ArrAdapter, ArrFlavor, ArrParseResult } from "../server/src/adapters/arr.js";
 import type { GeminiAdapter, ReleaseGuess } from "../server/src/adapters/gemini.js";
 import {
-  identifyRelease, cachedIdentify, resetIdentifyCache, plausibleMatch,
+  identifyRelease, cachedIdentify, resetIdentifyCache, plausibleMatch, looksLikeSoftware,
 } from "../server/src/lib/identify.js";
 
 /**
@@ -209,21 +209,22 @@ describe("plausibleMatch — a lookup's best effort is not automatically an answ
 
 describe("the ladder does not stop on a parse that matched nothing", () => {
   it("falls through to Gemini when the parse produced no plausible candidate", async () => {
-    // The Ubuntu case: Sonarr parses it, its lookup returns something unrelated,
-    // and the gate rejects it. Stopping there would present junk as an answer.
+    // The real "brba" case: Sonarr parses it, its lookup returns an unrelated
+    // show that happens to share one word, and the gate rejects it. Stopping
+    // there would have presented "You Complete Me" as the answer.
     const sonarr = fakeArr("sonarr", {
-      parse: parsed({ service: "sonarr", title: "Ubuntu" }),
-      candidates: [{ selectionId: "tvdb:1", title: "Rebellion!" }],
+      parse: parsed({ service: "sonarr", title: "brba complete", seasonNumber: 1 }),
+      candidates: [{ selectionId: "tvdb:1", title: "You Complete Me", year: 2023 }],
     });
-    const gemini = fakeGemini(null); // honestly declines: it is a Linux ISO
+    const gemini = fakeGemini(null); // declines rather than guessing at "brba"
 
-    const id = await identifyRelease("Ubuntu.24.04.LTS.desktop.amd64.iso", { arrs: { sonarr }, gemini });
+    const id = await identifyRelease("brba complete s01 1080p", { arrs: { sonarr }, gemini });
 
     expect(gemini.identify).toHaveBeenCalledOnce();
     expect(id.source).toBe("none");
     expect(id.candidates).toEqual([]);
     // The rejected parse survives as context, so the explanation is not a shrug.
-    expect(id.detail).toMatch(/Ubuntu/);
+    expect(id.detail).toMatch(/brba complete/);
     expect(id.detail).toMatch(/matched nothing/);
   });
 
@@ -250,5 +251,37 @@ describe("the ladder does not stop on a parse that matched nothing", () => {
     const id = await identifyRelease("Dune.Part.Two.2024", { arrs: { radarr }, gemini });
     expect(id.source).toBe("arr-parse");
     expect(gemini.identify).not.toHaveBeenCalled();
+  });
+});
+
+describe("looksLikeSoftware — the case string similarity cannot settle", () => {
+  it("catches the real one: an *arr claimed a Linux ISO", () => {
+    // Sonarr parses this to "Ubuntu", which is a genuine prefix of the real
+    // series "Ubuntu Jazz Sessions" -- so every similarity rule accepts it.
+    // The evidence is in the release name, not the title.
+    expect(looksLikeSoftware("Ubuntu.24.04.LTS.desktop.amd64.iso")).toBe(true);
+    expect(looksLikeSoftware("SomeApp-3.2.1-x86_64.AppImage")).toBe(true);
+    expect(looksLikeSoftware("Photoshop.2026.setup.exe")).toBe(true);
+  });
+
+  it("does not catch media, including ISO rips", () => {
+    // .iso is deliberately NOT a marker: DVD and Blu-ray rips use it.
+    expect(looksLikeSoftware("The.Matrix.1999.1080p.BluRay.x264-GROUP")).toBe(false);
+    expect(looksLikeSoftware("Some.Movie.2001.COMPLETE.BLURAY.iso")).toBe(false);
+    expect(looksLikeSoftware("Severance.S02E01.2160p.WEB-DL")).toBe(false);
+    // x264/x265 must not trip the x86_64 alternative.
+    expect(looksLikeSoftware("Dune.Part.Two.2024.x265-RARBG")).toBe(false);
+  });
+
+  it("skips the *arr parsers entirely for software", async () => {
+    const sonarr = fakeArr("sonarr", {
+      parse: parsed({ service: "sonarr", title: "Ubuntu" }),
+      candidates: [{ selectionId: "tvdb:9", title: "Ubuntu Jazz Sessions" }],
+    });
+    const id = await identifyRelease("Ubuntu.24.04.LTS.desktop.amd64.iso", { arrs: { sonarr }, gemini: null });
+
+    expect(sonarr.parse).not.toHaveBeenCalled();
+    expect(id.source).toBe("none");
+    expect(id.detail).toMatch(/looks like software/i);
   });
 });

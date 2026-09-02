@@ -94,6 +94,27 @@ function lookupTerm(title: string, year?: number): string {
   return year ? `${title} ${year}` : title;
 }
 
+/**
+ * Markers that a release is software or another non-media artifact.
+ *
+ * Needed because string similarity cannot settle a single-word title: Sonarr
+ * parses `Ubuntu.24.04.LTS.desktop.amd64.iso` to "Ubuntu", and "Ubuntu" is a
+ * genuine prefix of the real series "Ubuntu Jazz Sessions", so every
+ * similarity rule accepts it. The distinguishing evidence is not in the title
+ * at all -- it is `amd64` and `LTS` sitting in the release name.
+ *
+ * Deliberately narrow: only markers that essentially never appear in a media
+ * release. `.iso` is NOT among them, because DVD and Blu-ray rips are
+ * legitimately distributed as ISO images.
+ */
+const SOFTWARE_MARKERS =
+  /(^|[^a-z0-9])(amd64|x86[_-]?64|i[36]86|aarch64|lts|winx64|\.exe|\.msi|\.apk|\.deb|\.rpm|\.dmg|keygen|installer|setup)([^a-z0-9]|$)/i;
+
+/** Does this look like software rather than something an *arr should own? */
+export function looksLikeSoftware(release: string): boolean {
+  return SOFTWARE_MARKERS.test(release);
+}
+
 /** Comparable word tokens; punctuation and single characters carry no signal. */
 function tokens(s: string): string[] {
   return s.toLowerCase().split(/[^a-z0-9]+/i).filter((t) => t.length > 1);
@@ -181,10 +202,15 @@ export async function identifyRelease(
   const name = release.trim();
   if (!name) return unidentified(release, "empty release name");
 
+  // Software never belongs to an *arr, and their parsers will happily claim it
+  // anyway. Skipping rung 1 here costs nothing -- an *arr match would have been
+  // wrong -- and leaves the name to Gemini, which recognises it and declines.
+  const software = looksLikeSoftware(name);
+
   // --- 1. the *arrs' own parsers ------------------------------------------
   let parsed: ArrParseResult[] = [];
   try {
-    parsed = await parseAll(deps.arrs, name);
+    parsed = software ? [] : await parseAll(deps.arrs, name);
   } catch {
     parsed = [];
   }
@@ -244,7 +270,12 @@ export async function identifyRelease(
 
   // --- 3. Gemini, and only now --------------------------------------------
   if (!deps.gemini) {
-    return unidentified(release, `no *arr could identify this name${parseNote}, and Gemini is not configured`);
+    return unidentified(
+      release,
+      software
+        ? "this looks like software, not media, and Gemini is not configured to confirm it"
+        : `no *arr could identify this name${parseNote}, and Gemini is not configured`,
+    );
   }
 
   let guess;
