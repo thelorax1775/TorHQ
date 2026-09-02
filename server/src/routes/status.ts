@@ -22,13 +22,13 @@ function diskUsage(path: string): { path: string; totalBytes: number; freeBytes:
 
 export function statusRoutes(app: FastifyInstance, ctx: AppContext): void {
   // Aggregate health for every configured service.
-  app.get("/api/status/health", { preHandler: app.requireAuth }, async () => {
+  app.get("/api/status/health", { preHandler: [app.requireAuth, app.requireAdmin] }, async () => {
     const health = await checkAllHealth([...ctx.serviceKinds], ctx.masterKey);
     return { health, services: listServicesSafe() };
   });
 
   // Active downloads grouped by owning category (radarr/sonarr/torhq-*).
-  app.get("/api/status/downloads", { preHandler: app.requireAuth }, async (_req, reply) => {
+  app.get("/api/status/downloads", { preHandler: [app.requireAuth, app.requireAdmin] }, async (_req, reply) => {
     const qb = getAdapter("qbittorrent", ctx.masterKey) as QbittorrentAdapter | null;
     if (!qb) return reply.code(409).send({ error: "qbittorrent not configured" });
     try {
@@ -42,7 +42,7 @@ export function statusRoutes(app: FastifyInstance, ctx: AppContext): void {
   });
 
   // Recent Radarr/Sonarr/Lidarr activity.
-  app.get("/api/status/arr-activity", { preHandler: app.requireAuth }, async () => {
+  app.get("/api/status/arr-activity", { preHandler: [app.requireAuth, app.requireAdmin] }, async () => {
     const out: Record<string, unknown> = {};
     for (const kind of ["radarr", "sonarr", "lidarr"]) {
       const a = getAdapter(kind, ctx.masterKey) as ArrAdapter | null;
@@ -58,7 +58,7 @@ export function statusRoutes(app: FastifyInstance, ctx: AppContext): void {
   });
 
   // Recent slskd downloads.
-  app.get("/api/status/slskd", { preHandler: app.requireAuth }, async (_req, reply) => {
+  app.get("/api/status/slskd", { preHandler: [app.requireAuth, app.requireAdmin] }, async (_req, reply) => {
     const a = getAdapter("slskd", ctx.masterKey) as SlskdAdapter | null;
     if (!a) return reply.code(409).send({ error: "slskd not configured" });
     try {
@@ -69,19 +69,19 @@ export function statusRoutes(app: FastifyInstance, ctx: AppContext): void {
   });
 
   // Failed imports + retry queue.
-  app.get("/api/status/failures", { preHandler: app.requireAuth }, async () => ({
+  app.get("/api/status/failures", { preHandler: [app.requireAuth, app.requireAdmin] }, async () => ({
     failed: listJobs("dead"),
     retrying: listJobs("queued").filter((j) => j.attempts > 0),
   }));
 
   // Storage usage for configured roots.
-  app.get("/api/status/storage", { preHandler: app.requireAuth }, async () => ({
+  app.get("/api/status/storage", { preHandler: [app.requireAuth, app.requireAdmin] }, async () => ({
     disks: ctx.env.approvedRoots.map(diskUsage).filter(Boolean),
   }));
 
   // Read-only view of NFS/SMB shares bind-mounted into this container.
   // TorHQ does not mount anything itself — see scripts/mount-share.sh.
-  app.get("/api/status/mounts", { preHandler: app.requireAuth }, async () => ({
+  app.get("/api/status/mounts", { preHandler: [app.requireAuth, app.requireAdmin] }, async () => ({
     mounts: listNetworkMounts(),
   }));
 }

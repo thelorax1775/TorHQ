@@ -115,7 +115,7 @@ async function withTimeout<T>(work: Promise<T>, ms = PROBE_TIMEOUT_MS): Promise<
 }
 
 export function searchRoutes(app: FastifyInstance, ctx: AppContext): void {
-  const guard = { preHandler: [app.requireAuth, app.requireCsrf] };
+  const guard = { preHandler: [app.requireAuth, app.requireAdmin, app.requireCsrf] };
 
   const prowlarr = () => getAdapter("prowlarr", ctx.masterKey) as ProwlarrAdapter | null;
   const site = () => getAdapter("torrentsearch", ctx.masterKey) as TorrentSearchAdapter | null;
@@ -131,7 +131,7 @@ export function searchRoutes(app: FastifyInstance, ctx: AppContext): void {
    * UI renders an unavailable source disabled with `detail` as the reason
    * rather than hiding it.
    */
-  app.get("/api/search/sources", { preHandler: app.requireAuth }, async () => {
+  app.get("/api/search/sources", { preHandler: [app.requireAuth, app.requireAdmin] }, async () => {
     const probe = async (
       id: string, label: string, work: () => Promise<{ available: boolean; detail: string }>,
       timeoutMs?: number,
@@ -173,7 +173,7 @@ export function searchRoutes(app: FastifyInstance, ctx: AppContext): void {
   });
 
   // Indexer list (with categories) for the Prowlarr search filters.
-  app.get("/api/search/indexers", { preHandler: app.requireAuth }, async (_req, reply) => {
+  app.get("/api/search/indexers", { preHandler: [app.requireAuth, app.requireAdmin] }, async (_req, reply) => {
     const p = prowlarr();
     if (!p) return reply.code(409).send({ error: "Prowlarr is not configured" });
     try {
@@ -185,7 +185,7 @@ export function searchRoutes(app: FastifyInstance, ctx: AppContext): void {
 
   // Search one source. Read-only, so auth-only (no CSRF). The query is parsed
   // before any adapter lookup so a bad query is a 400, not a 409.
-  app.get("/api/search", { preHandler: app.requireAuth }, async (req, reply) => {
+  app.get("/api/search", { preHandler: [app.requireAuth, app.requireAdmin] }, async (req, reply) => {
     const query = SearchQuery.parse(req.query);
 
     if (query.source === "web") {

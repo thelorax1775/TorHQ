@@ -118,7 +118,7 @@ export function arrMessage(e: unknown): string {
 }
 
 export function acquireRoutes(app: FastifyInstance, ctx: AppContext): void {
-  const guard = { preHandler: [app.requireAuth, app.requireCsrf] };
+  const guard = { preHandler: [app.requireAuth, app.requireAdmin, app.requireCsrf] };
   const arr = (kind: ArrFlavor) => getAdapter(kind, ctx.masterKey) as ArrAdapter | null;
 
   /** Read one *arr's saved placement defaults. */
@@ -158,7 +158,7 @@ export function acquireRoutes(app: FastifyInstance, ctx: AppContext): void {
    * An *arr that is down or unconfigured is reported, not hidden: a missing
    * Sonarr must not silently turn "no TV results" into "no such show".
    */
-  app.get("/api/acquire/lookup", { preHandler: app.requireAuth }, async (req) => {
+  app.get("/api/acquire/lookup", { preHandler: [app.requireAuth, app.requireAdmin] }, async (req) => {
     const { q } = LookupQuery.parse(req.query);
     const candidates: ArrCandidateWithService[] = [];
     const unavailable: Array<{ service: ArrFlavor; detail: string }> = [];
@@ -184,7 +184,7 @@ export function acquireRoutes(app: FastifyInstance, ctx: AppContext): void {
   });
 
   /** The saved defaults plus the live options they are chosen from, per *arr. */
-  app.get("/api/acquire/defaults", { preHandler: app.requireAuth }, async () => {
+  app.get("/api/acquire/defaults", { preHandler: [app.requireAuth, app.requireAdmin] }, async () => {
     const services = await Promise.all(ARR_SERVICES.map(async (service) => {
       const a = arr(service);
       if (!a) return { service, configured: false as const, detail: "not configured" };
@@ -290,7 +290,7 @@ export function acquireRoutes(app: FastifyInstance, ctx: AppContext): void {
    * refuses a whole-series interactive search), Lidarr can narrow to an album.
    * Radarr has nothing to choose — a movie is the unit.
    */
-  app.get("/api/acquire/targets", { preHandler: app.requireAuth }, async (req, reply) => {
+  app.get("/api/acquire/targets", { preHandler: [app.requireAuth, app.requireAdmin] }, async (req, reply) => {
     const { service, id } = TargetsQuery.parse(req.query);
     const a = arr(service);
     if (!a) return reply.code(409).send({ error: `${service} is not configured` });
@@ -320,7 +320,7 @@ export function acquireRoutes(app: FastifyInstance, ctx: AppContext): void {
     return { ok: true, ...viewOf(job) };
   });
 
-  app.get("/api/acquire/search/:id", { preHandler: app.requireAuth }, async (req, reply) => {
+  app.get("/api/acquire/search/:id", { preHandler: [app.requireAuth, app.requireAdmin] }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const job = getSearch(id);
     // Expired rather than never-existed, in all likelihood — say so, because

@@ -33,10 +33,10 @@ const LibraryInput = z.object({
 const LibraryKeyParam = z.object({ key: z.string().min(1).max(64).regex(/^[a-z0-9-]+$/) });
 
 export function setupRoutes(app: FastifyInstance, ctx: AppContext): void {
-  const guard = { preHandler: [app.requireAuth, app.requireCsrf] };
+  const guard = { preHandler: [app.requireAuth, app.requireAdmin, app.requireCsrf] };
 
   // List configured services (secrets masked — never full keys to browser).
-  app.get("/api/services", { preHandler: app.requireAuth }, async () => ({
+  app.get("/api/services", { preHandler: [app.requireAuth, app.requireAdmin] }, async () => ({
     services: listServicesSafe(),
     kinds: SERVICE_KINDS,
   }));
@@ -62,7 +62,7 @@ export function setupRoutes(app: FastifyInstance, ctx: AppContext): void {
   });
 
   // Destination libraries for manual intake. Paths validated against roots.
-  app.get("/api/libraries", { preHandler: app.requireAuth }, async () => ({
+  app.get("/api/libraries", { preHandler: [app.requireAuth, app.requireAdmin] }, async () => ({
     libraries: listLibraries(),
   }));
 
@@ -100,7 +100,7 @@ export function setupRoutes(app: FastifyInstance, ctx: AppContext): void {
   });
 
   // Expose approved roots so the UI can guide path entry (read-only).
-  app.get("/api/config/roots", { preHandler: app.requireAuth }, async () => ({
+  app.get("/api/config/roots", { preHandler: [app.requireAuth, app.requireAdmin] }, async () => ({
     approvedRoots: ctx.env.approvedRoots,
   }));
 }

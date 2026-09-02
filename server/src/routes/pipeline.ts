@@ -23,11 +23,11 @@ const ManualImportBody = z.object({
 });
 
 export function pipelineRoutes(app: FastifyInstance, ctx: AppContext): void {
-  const guard = { preHandler: [app.requireAuth, app.requireCsrf] };
+  const guard = { preHandler: [app.requireAuth, app.requireAdmin, app.requireCsrf] };
   const arrAdapter = (kind: ArrFlavor) => getAdapter(kind, ctx.masterKey) as ArrAdapter | null;
 
   // Read-only end-to-end verification of the grab → download → import path.
-  app.get("/api/pipeline/check", { preHandler: app.requireAuth }, async () => {
+  app.get("/api/pipeline/check", { preHandler: [app.requireAuth, app.requireAdmin] }, async () => {
     // qBittorrent first: its save paths are what each *arr is then asked to look
     // for, which is the one check that needs both sides of the pipeline at once.
     const qb = await qbSnapshot(getAdapter("qbittorrent", ctx.masterKey) as QbittorrentAdapter | null);
@@ -37,7 +37,7 @@ export function pipelineRoutes(app: FastifyInstance, ctx: AppContext): void {
   });
 
   // Downloads the *arr finished but could not import.
-  app.get("/api/pipeline/failed-imports", { preHandler: app.requireAuth }, async () => {
+  app.get("/api/pipeline/failed-imports", { preHandler: [app.requireAuth, app.requireAdmin] }, async () => {
     const items: FailedImport[] = [];
     const unavailable: Array<{ service: ArrFlavor; detail: string }> = [];
     await Promise.all(ARR_SERVICES.map(async (service) => {

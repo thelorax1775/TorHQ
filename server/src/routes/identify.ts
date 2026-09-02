@@ -31,7 +31,7 @@ const BatchBody = z.object({
 export function identifyRoutes(app: FastifyInstance, ctx: AppContext): void {
   // Identification is read-only, but it can spend money at the Gemini rung, so
   // it is a POST behind CSRF rather than a freely-linkable GET.
-  const guard = { preHandler: [app.requireAuth, app.requireCsrf] };
+  const guard = { preHandler: [app.requireAuth, app.requireAdmin, app.requireCsrf] };
 
   function deps(): IdentifyDeps {
     const arrs: Partial<Record<ArrFlavor, ArrAdapter>> = {};
@@ -43,7 +43,7 @@ export function identifyRoutes(app: FastifyInstance, ctx: AppContext): void {
   }
 
   /** What identification can do right now, and what it would fall back to. */
-  app.get("/api/identify/status", { preHandler: app.requireAuth }, async () => {
+  app.get("/api/identify/status", { preHandler: [app.requireAuth, app.requireAdmin] }, async () => {
     const d = deps();
     const parsers = Object.keys(d.arrs) as ArrFlavor[];
     return {
@@ -68,7 +68,7 @@ export function identifyRoutes(app: FastifyInstance, ctx: AppContext): void {
    * of the key, not of the release. A stale hardcoded list is how you end up
    * choosing a model that 404s on first use.
    */
-  app.get("/api/identify/models", { preHandler: app.requireAuth }, async (_req, reply) => {
+  app.get("/api/identify/models", { preHandler: [app.requireAuth, app.requireAdmin] }, async (_req, reply) => {
     const gemini = getAdapter("gemini", ctx.masterKey) as GeminiAdapter | null;
     if (!gemini) return reply.code(409).send({ error: "Gemini is not configured" });
     try {

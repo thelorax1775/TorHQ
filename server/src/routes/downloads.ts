@@ -51,7 +51,7 @@ const RemoveParams = z.object({
 });
 
 export function downloadRoutes(app: FastifyInstance, ctx: AppContext): void {
-  const guard = { preHandler: [app.requireAuth, app.requireCsrf] };
+  const guard = { preHandler: [app.requireAuth, app.requireAdmin, app.requireCsrf] };
   const qbAdapter = () => getAdapter("qbittorrent", ctx.masterKey) as QbittorrentAdapter | null;
   const arrAdapter = (kind: ArrFlavor) => getAdapter(kind, ctx.masterKey) as ArrAdapter | null;
 

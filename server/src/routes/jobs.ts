@@ -30,7 +30,7 @@ const IntakeInput = z.object({
 });
 
 export function jobRoutes(app: FastifyInstance, ctx: AppContext): void {
-  const guard = { preHandler: [app.requireAuth, app.requireCsrf] };
+  const guard = { preHandler: [app.requireAuth, app.requireAdmin, app.requireCsrf] };
 
   // Dry-run preview before committing an intake.
   app.post("/api/intake/preview", guard, async (req, reply) => {
