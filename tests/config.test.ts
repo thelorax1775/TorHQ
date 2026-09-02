@@ -36,9 +36,25 @@ describe("typed extra config: mergeExtra", () => {
     expect(() => mergeExtra("slskd", { webhookToken: "short" }, {})).toThrow();
   });
   it("ignores extra for kinds without a schema", () => {
-    expect(mergeExtra("radarr", { anything: 1 }, {})).toEqual({});
-    expect(hasExtraConfig("radarr")).toBe(false);
+    // jellyfin has no configurable extra: an unknown field is dropped entirely.
+    expect(mergeExtra("jellyfin", { anything: 1 }, {})).toEqual({});
+    expect(hasExtraConfig("jellyfin")).toBe(false);
     expect(hasExtraConfig("slskd")).toBe(true);
+  });
+  it("keeps the acquire placement defaults on each *arr", () => {
+    // The Get page saves where an *arr should put what it adds. Unknown fields
+    // are still dropped, so an old client cannot write arbitrary config.
+    for (const kind of ["radarr", "sonarr", "lidarr"]) {
+      expect(hasExtraConfig(kind)).toBe(true);
+      expect(mergeExtra(kind, { rootFolderPath: "/mnt/storage/movies", qualityProfileId: 4, anything: 1 }, {}))
+        .toEqual({ rootFolderPath: "/mnt/storage/movies", qualityProfileId: 4 });
+    }
+    expect(mergeExtra("lidarr", { metadataProfileId: 2 }, {})).toEqual({ metadataProfileId: 2 });
+  });
+  it("treats an omitted extra as leave-alone, so an unrelated save keeps the defaults", () => {
+    // Services sends no extra for these kinds; that must not wipe placement.
+    const saved = { rootFolderPath: "/mnt/storage/movies", qualityProfileId: 4 };
+    expect(mergeExtra("radarr", undefined, saved)).toEqual(saved);
   });
 });
 
