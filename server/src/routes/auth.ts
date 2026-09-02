@@ -63,6 +63,7 @@ export function authRoutes(app: FastifyInstance, ctx: AppContext): void {
       authenticated: !!req.session,
       needsSetup: !adminExists(),
       csrfToken: req.session?.csrfToken ?? null,
+      role: req.session?.role ?? null,
     };
   });
 }
