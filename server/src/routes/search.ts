@@ -52,6 +52,17 @@ const GRAB_CATEGORIES = ["torhq-manual", "radarr", "sonarr", "lidarr"] as const;
 /** Who should end up owning the download. */
 const GRAB_TARGETS = ["qbittorrent", "radarr", "sonarr", "lidarr"] as const;
 
+/**
+ * A release title as an indexer reported it. Used only to label the activity
+ * log, so it is normalised rather than validated: some indexers return
+ * multi-line titles hundreds of characters long, and rejecting the grab over a
+ * cosmetic field would fail a request that is otherwise perfectly valid -- with
+ * an error naming a limit the user did not choose and cannot influence.
+ */
+const ReleaseLabel = z.string().max(8192)
+  .transform((s) => s.replace(/\s+/g, " ").trim().slice(0, 512))
+  .optional();
+
 const GrabBody = z.object({
   source: z.enum(["prowlarr", "site"]).default("site"),
   // Only well-formed magnet links — never an arbitrary URL handed to qBittorrent.
@@ -62,7 +73,7 @@ const GrabBody = z.object({
   guid: z.string().min(1).max(2048).optional(),
   indexerId: z.coerce.number().int().nonnegative().optional(),
   downloadUrl: z.string().url().max(2048).optional(),
-  title: z.string().max(512).optional(),
+  title: ReleaseLabel,
   target: z.enum(GRAB_TARGETS).optional(),
   /** Legacy alias for `target`, expressed as the qBittorrent category. */
   category: z.enum(GRAB_CATEGORIES).optional(),

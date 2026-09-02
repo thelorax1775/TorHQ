@@ -52,6 +52,25 @@ describe("search + grab routes", () => {
     expect(r.statusCode).toBe(409);
   });
 
+  it("does not fail a grab over a long or multi-line release title", async () => {
+    // Real case, from Byrutor via Prowlarr: a title with embedded newlines and
+    // hundreds of characters. The title only labels the activity log, so
+    // rejecting the whole grab for it fails a valid request over a cosmetic
+    // field, with an error naming a limit the user cannot influence.
+    const r = await app.inject({
+      method: "POST", url: "/api/search/grab", headers: auth(),
+      payload: {
+        source: "site",
+        magnet: "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+        title: ["Some Game", "", "        Studio        "].join(String.fromCharCode(10)) + "x".repeat(900),
+      },
+    });
+    // 409 (qBittorrent unconfigured) means it got past validation, which is the
+    // point; a 400 would mean the title had killed it.
+    expect(r.statusCode).toBe(409);
+    expect(r.json().error).not.toMatch(/512/);
+  });
+
   it("returns 409 grabbing when qBittorrent is not configured", async () => {
     const r = await app.inject({
       method: "POST", url: "/api/search/grab", headers: auth(),

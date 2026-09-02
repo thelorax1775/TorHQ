@@ -57,11 +57,22 @@ const SearchBody = z.object({
   albumId: z.number().int().positive().optional(),
 });
 
+/**
+ * A release title as an indexer reported it. Used only to label the activity
+ * log, so it is normalised rather than validated: some indexers return
+ * multi-line titles hundreds of characters long, and rejecting the grab over a
+ * cosmetic field would fail a request that is otherwise perfectly valid -- with
+ * an error naming a limit the user did not choose and cannot influence.
+ */
+const ReleaseLabel = z.string().max(8192)
+  .transform((s) => s.replace(/\s+/g, " ").trim().slice(0, 512))
+  .optional();
+
 const GrabBody = z.object({
   service: Service,
   guid: z.string().min(1).max(4096),
   indexerId: z.number().int().nonnegative(),
-  title: z.string().max(512).optional(),
+  title: ReleaseLabel,
   /**
    * Set when the release was one the *arr's profile rejected — a deliberate
    * override, recorded as such in the activity log.
