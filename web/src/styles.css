@@ -773,6 +773,35 @@ pre {
 .mt-2 { margin-top: var(--s2); }
 .mt-3 { margin-top: var(--s3); }
 .mt-4 { margin-top: var(--s4); }
+/* A button that reads as a link: used for inline actions inside a table cell,
+   where a real button would dominate the row it sits under. */
+.linklike {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.linklike:hover { color: var(--text); }
+.linklike:disabled { color: var(--text-dim); cursor: default; text-decoration: none; }
+
+/* The identification line under a release name. It must WRAP inside the title
+   cell rather than run past it: the release name, the matched title and the
+   action together are routinely wider than the column, and clipping them hides
+   the year -- the one field that distinguishes two films with the same name. */
+.identity-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+}
+.identity-row > .id-title { min-width: 0; overflow-wrap: anywhere; }
+
 .muted-row > td { opacity: 0.62; }
 .muted-row:hover > td { opacity: 1; }
 .sr-only {
