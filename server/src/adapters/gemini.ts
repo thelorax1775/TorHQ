@@ -14,6 +14,11 @@ export function geminiMessage(e: unknown): string {
       const msg = parsed.error?.message;
       if (msg) return parsed.error?.status ? `${msg} (${parsed.error.status})` : msg;
     } catch {
+      // Still truncated, or not JSON at all. The message field is near the front
+      // of Google's error envelope, so it usually survives -- and it is the only
+      // part worth showing.
+      const m = /"message"\s*:\s*"([^"]*)"/.exec(e.body);
+      if (m?.[1]) return m[1];
       if (e.body.length < 300 && !e.body.trimStart().startsWith("<")) return e.body;
     }
   }

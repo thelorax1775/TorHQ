@@ -9,7 +9,7 @@ vi.mock("../server/src/adapters/http.js", () => ({
   basicAuth: (s: string) => s,
 }));
 
-const { GeminiAdapter, parseGuess } = await import("../server/src/adapters/gemini.js");
+const { GeminiAdapter, parseGuess, geminiMessage } = await import("../server/src/adapters/gemini.js");
 
 const cfg = { baseUrl: "", secret: "TESTKEY" };
 
@@ -158,5 +158,32 @@ describe("parseGuess — the model's answer is validated, not trusted", () => {
     expect(parseGuess({})).toBeNull();
     expect(parseGuess(null)).toBeNull();
     expect(parseGuess({ candidates: [{ content: { parts: [{ text: "I'm sorry, I can't." }] } }] })).toBeNull();
+  });
+});
+
+describe("geminiMessage — Google's reason survives a truncated body", () => {
+  it("reads the message from a well-formed error envelope", async () => {
+    const { HttpError } = await import("../server/src/adapters/http.js");
+    const e = new HttpError("HTTP 404", 404, JSON.stringify({
+      error: { message: "This model is no longer available to new users.", status: "NOT_FOUND" },
+    }));
+    expect(geminiMessage(e)).toMatch(/no longer available to new users/);
+    expect(geminiMessage(e)).toMatch(/NOT_FOUND/);
+  });
+
+  it("still recovers the message when the body was cut mid-JSON", async () => {
+    // The live failure: httpJson truncates, JSON.parse then fails, and the only
+    // useful part of the response was being discarded in favour of "HTTP 429".
+    const { HttpError } = await import("../server/src/adapters/http.js");
+    const truncated =
+      '{"error":{"code":429,"message":"You exceeded your current quota. Please migrate to Gemini 3.","status":"RESOURCE_EXHAU';
+    expect(geminiMessage(new HttpError("HTTP 429", 429, truncated)))
+      .toBe("You exceeded your current quota. Please migrate to Gemini 3.");
+  });
+
+  it("falls back to the status line rather than dumping an HTML error page", async () => {
+    const { HttpError } = await import("../server/src/adapters/http.js");
+    const html = "<!doctype html><html>" + "x".repeat(400) + "</html>";
+    expect(geminiMessage(new HttpError("HTTP 502", 502, html))).toBe("HTTP 502");
   });
 });

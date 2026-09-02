@@ -47,7 +47,10 @@ export async function httpJson<T = unknown>(
   });
   const text = await res.body.text();
   if (res.statusCode >= 400) {
-    throw new HttpError(`HTTP ${res.statusCode} for ${url}`, res.statusCode, text.slice(0, 500));
+    // 500 was too small: an upstream's JSON error body routinely exceeds it, and
+    // a truncated body cannot be JSON.parsed -- so the actual reason for the
+    // failure was being thrown away and replaced by the status line.
+    throw new HttpError(`HTTP ${res.statusCode} for ${url}`, res.statusCode, text.slice(0, 4000));
   }
   if (!text) return undefined as T;
   try {
