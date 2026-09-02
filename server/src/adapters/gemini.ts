@@ -286,21 +286,52 @@ export class GeminiAdapter implements ServiceAdapter {
 }
 
 /**
+ * Find the model's JSON answer among the response parts.
+ *
+ * Reading `parts[0].text` is not enough. Gemini 3.x models emit **thinking**
+ * parts alongside the answer, so slot 0 is routinely reasoning rather than the
+ * result -- which parsed as nothing and turned a perfectly good identification
+ * into a silent "could not identify". Every non-thought part is considered, and
+ * a JSON object embedded in prose is recovered as a last resort.
+ */
+function extractJson(res: any): any {
+  const parts = res?.candidates?.[0]?.content?.parts;
+  if (!Array.isArray(parts)) return null;
+
+  const texts: string[] = [];
+  for (const p of parts) {
+    if (p?.thought) continue; // reasoning, not the answer
+    if (typeof p?.text === "string" && p.text.trim()) texts.push(p.text);
+  }
+  // Nothing but thoughts: fall back to every part, in case a build does not
+  // flag them and the answer is in there somewhere.
+  if (!texts.length) {
+    for (const p of parts) {
+      if (typeof p?.text === "string" && p.text.trim()) texts.push(p.text);
+    }
+  }
+
+  for (const candidate of [...texts, texts.join("")]) {
+    try {
+      return JSON.parse(candidate);
+    } catch { /* try the next shape */ }
+    const brace = /\{[\s\S]*\}/.exec(candidate);
+    if (brace) {
+      try { return JSON.parse(brace[0]); } catch { /* keep looking */ }
+    }
+  }
+  return null;
+}
+
+/**
  * Pull the guess out of a generateContent response and sanity-check it. The
  * response schema makes well-formed JSON very likely but not certain — safety
  * blocks, truncation and empty candidates all produce a valid response with no
  * usable content — so every field is re-validated here rather than trusted.
  */
 export function parseGuess(res: any): ReleaseGuess | null {
-  const text = res?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (typeof text !== "string" || !text.trim()) return null;
-
-  let raw: any;
-  try {
-    raw = JSON.parse(text);
-  } catch {
-    return null;
-  }
+  const raw = extractJson(res);
+  if (!raw) return null;
 
   const title = typeof raw?.title === "string" ? raw.title.trim() : "";
   if (!title) return null; // a guess with no title identifies nothing

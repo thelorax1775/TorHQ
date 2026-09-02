@@ -187,3 +187,38 @@ describe("geminiMessage — Google's reason survives a truncated body", () => {
     expect(geminiMessage(new HttpError("HTTP 502", 502, html))).toBe("HTTP 502");
   });
 });
+
+describe("parseGuess — thinking models put the answer after their reasoning", () => {
+  const guess = { kind: "movie", title: "Amelie", year: 2001, confidence: 0.9 };
+
+  it("skips a thought part and reads the real answer", () => {
+    // Gemini 3.x emits reasoning parts alongside the result. Reading parts[0]
+    // got the reasoning, failed to parse it, and reported "could not identify"
+    // for a release the model had in fact identified.
+    const res = { candidates: [{ content: { parts: [
+      { text: "The user gave a French film title...", thought: true },
+      { text: JSON.stringify(guess) },
+    ] } }] };
+    expect(parseGuess(res)).toMatchObject({ title: "Amelie", year: 2001 });
+  });
+
+  it("finds the answer in a later part even when nothing is flagged as thought", () => {
+    const res = { candidates: [{ content: { parts: [
+      { text: "Let me think about this." },
+      { text: JSON.stringify(guess) },
+    ] } }] };
+    expect(parseGuess(res)?.title).toBe("Amelie");
+  });
+
+  it("recovers a JSON object embedded in prose", () => {
+    const res = { candidates: [{ content: { parts: [
+      { text: "Here you go:\n```json\n" + JSON.stringify(guess) + "\n```" },
+    ] } }] };
+    expect(parseGuess(res)?.title).toBe("Amelie");
+  });
+
+  it("still returns null when there is genuinely no answer", () => {
+    expect(parseGuess({ candidates: [{ content: { parts: [{ text: "I cannot help.", thought: true }] } }] })).toBeNull();
+    expect(parseGuess({ candidates: [{ content: { parts: [] } }] })).toBeNull();
+  });
+});
