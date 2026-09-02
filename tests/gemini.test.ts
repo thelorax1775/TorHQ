@@ -38,10 +38,12 @@ describe("GeminiAdapter wiring", () => {
   });
 
   it("uses the configured model, and a sane default without one", () => {
-    expect(new GeminiAdapter(cfg).model).toBe("gemini-2.5-flash");
+    // The default is an ALIAS on purpose: a pinned version goes stale, and
+    // gemini-2.5-flash is already refused for new keys.
+    expect(new GeminiAdapter(cfg).model).toBe("gemini-flash-latest");
     expect(new GeminiAdapter({ ...cfg, extra: { model: "gemini-3-pro" } }).model).toBe("gemini-3-pro");
     // A blank field means "the default", not a request for a model named "".
-    expect(new GeminiAdapter({ ...cfg, extra: { model: "   " } }).model).toBe("gemini-2.5-flash");
+    expect(new GeminiAdapter({ ...cfg, extra: { model: "   " } }).model).toBe("gemini-flash-latest");
   });
 
   it("asks for deterministic, schema-constrained JSON", async () => {
@@ -66,18 +68,39 @@ describe("GeminiAdapter.health", () => {
     expect(h.healthy).toBe(false);
     expect(h.detail).toMatch(/not available to this key/);
     expect(h.detail).toMatch(/gemini-2\.5-flash/); // and says what it could use
+    // Rejected from the list alone -- no point spending a call on it.
+    expect(httpJson).toHaveBeenCalledTimes(1);
   });
 
-  it("is healthy when the configured model is present", async () => {
-    httpJson.mockResolvedValueOnce({
-      models: [
-        { name: "models/gemini-2.5-flash", supportedGenerationMethods: ["generateContent"] },
+  it("is healthy only once the model has actually answered", async () => {
+    httpJson
+      .mockResolvedValueOnce({ models: [
+        { name: "models/gemini-flash-latest", supportedGenerationMethods: ["generateContent"] },
         { name: "models/text-embedding-004", supportedGenerationMethods: ["embedContent"] },
-      ],
-    });
+      ] })
+      .mockResolvedValueOnce(reply({ kind: "movie", title: "Probe", confidence: 0.9 }));
     const h = await new GeminiAdapter(cfg).health();
     expect(h.healthy).toBe(true);
-    expect(h.version).toBe("gemini-2.5-flash");
+    expect(h.version).toBe("gemini-flash-latest");
+    expect(h.detail).toMatch(/answered/);
+    // Listing alone is not the check: it must have made the real call too.
+    expect(httpJson).toHaveBeenCalledTimes(2);
+  });
+
+  it("is UNHEALTHY when the model is listed but refuses the call", async () => {
+    // The live failure this check exists for: gemini-2.5-flash appears in
+    // ListModels and answers generateContent with "no longer available to new
+    // users". Reporting that as healthy is worse than reporting nothing.
+    const { HttpError } = await import("../server/src/adapters/http.js");
+    httpJson
+      .mockResolvedValueOnce({ models: [{ name: "models/gemini-flash-latest" }] })
+      .mockRejectedValueOnce(new HttpError("HTTP 404", 404, JSON.stringify({
+        error: { message: "This model models/x is no longer available to new users.", status: "NOT_FOUND" },
+      })));
+    const h = await new GeminiAdapter(cfg).health();
+    expect(h.healthy).toBe(false);
+    expect(h.detail).toMatch(/listed but will not answer/);
+    expect(h.detail).toMatch(/no longer available to new users/);
   });
 
   it("ignores models that cannot answer a generateContent call", async () => {
@@ -95,7 +118,9 @@ describe("GeminiAdapter.health", () => {
   it("counts a model that does not declare its methods as usable", async () => {
     // Older list responses omit supportedGenerationMethods; treating that as
     // "unusable" would report a working key as broken.
-    httpJson.mockResolvedValueOnce({ models: [{ name: "models/gemini-2.5-flash" }] });
+    httpJson
+      .mockResolvedValueOnce({ models: [{ name: "models/gemini-flash-latest" }] })
+      .mockResolvedValueOnce(reply({ kind: "movie", title: "Probe", confidence: 0.9 }));
     expect((await new GeminiAdapter(cfg).health()).healthy).toBe(true);
   });
 });

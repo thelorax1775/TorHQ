@@ -51,7 +51,13 @@ export interface ReleaseGuess {
   reasoning?: string;
 }
 
-const DEFAULT_MODEL = "gemini-2.5-flash";
+/**
+ * An alias, deliberately, not a pinned version. A pinned default is wrong the
+ * moment Google retires it -- `gemini-2.5-flash` was the obvious default when
+ * this was written and is already refused for new keys ("no longer available to
+ * new users"). An alias tracks whatever the current flash model is.
+ */
+const DEFAULT_MODEL = "gemini-flash-latest";
 const DEFAULT_BASE = "https://generativelanguage.googleapis.com";
 
 /**
@@ -143,7 +149,24 @@ export class GeminiAdapter implements ServiceAdapter {
           latencyMs,
         };
       }
-      return { healthy: true, version: this.model, detail: `${available.length} models available`, latencyMs };
+      // Listed is not the same as usable: a model can appear in ListModels and
+      // still refuse a call ("no longer available to new users"), which is how
+      // this check first reported Healthy while every identification 404'd.
+      // The only proof that the configured model answers is to ask it.
+      try {
+        await this.generate("Probe.2020.1080p");
+      } catch (e) {
+        return {
+          healthy: false,
+          detail: `${this.model} is listed but will not answer: ${geminiMessage(e)}`,
+          latencyMs: Date.now() - start,
+        };
+      }
+      return {
+        healthy: true, version: this.model,
+        detail: `${available.length} models available; ${this.model} answered`,
+        latencyMs: Date.now() - start,
+      };
     } catch (e) {
       return { healthy: false, detail: geminiMessage(e), latencyMs: Date.now() - start };
     }
