@@ -11,18 +11,18 @@ import { Button } from "./ui.js";
 import { usePolled } from "../lib/usePolled.js";
 import { speed } from "../lib/format.js";
 
-interface NavItem { to: string; label: string; icon: IconName; end?: boolean }
+interface NavItem { to: string; label: string; icon: IconName; end?: boolean; adminOnly?: boolean }
 
 export const NAV: Array<{ group: string; items: NavItem[] }> = [
   {
     group: "Overview",
-    items: [{ to: "/", label: "Dashboard", icon: "dashboard", end: true }],
+    items: [{ to: "/", label: "Dashboard", icon: "dashboard", end: true, adminOnly: true }],
   },
   {
     group: "Acquire",
     items: [
-      { to: "/get", label: "Get", icon: "plus" },
-      { to: "/search", label: "Raw search", icon: "search" },
+      { to: "/get", label: "Get", icon: "plus", adminOnly: true },
+      { to: "/search", label: "Raw search", icon: "search", adminOnly: true },
       { to: "/downloads", label: "Downloads", icon: "download" },
       { to: "/queue", label: "Queue", icon: "queue" },
       { to: "/requests", label: "Requests", icon: "star" },
@@ -31,17 +31,18 @@ export const NAV: Array<{ group: string; items: NavItem[] }> = [
   {
     group: "Library",
     items: [
-      { to: "/intake", label: "Intake", icon: "inbox" },
-      { to: "/libraries", label: "Libraries", icon: "book" },
+      { to: "/intake", label: "Intake", icon: "inbox", adminOnly: true },
+      { to: "/libraries", label: "Libraries", icon: "book", adminOnly: true },
       { to: "/jobs", label: "Jobs & activity", icon: "clock" },
     ],
   },
   {
     group: "System",
     items: [
-      { to: "/services", label: "Services", icon: "plug" },
-      { to: "/mounts", label: "Mounts", icon: "server" },
-      { to: "/settings", label: "Settings", icon: "settings" },
+      { to: "/services", label: "Services", icon: "plug", adminOnly: true },
+      { to: "/mounts", label: "Mounts", icon: "server", adminOnly: true },
+      { to: "/settings", label: "Settings", icon: "settings", adminOnly: true },
+      { to: "/users", label: "Users", icon: "shield", adminOnly: true },
     ],
   },
 ];
@@ -60,9 +61,12 @@ export function titleForPath(pathname: string): string {
 
 interface TransferSummary { transfer?: { dlspeed?: number; upspeed?: number } }
 
-export function Layout({ onLogout }: { onLogout: () => void }) {
+export function Layout({ onLogout, role }: { onLogout: () => void; role: "admin" | "member" | null }) {
   const [navOpen, setNavOpen] = useState(false);
   const location = useLocation();
+  const visibleNav = NAV
+    .map((g) => ({ ...g, items: g.items.filter((i) => !i.adminOnly || role === "admin") }))
+    .filter((g) => g.items.length > 0);
 
   // Close the drawer on navigation, and on Escape.
   useEffect(() => { setNavOpen(false); }, [location.pathname]);
@@ -87,7 +91,7 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
         </NavLink>
 
         <nav>
-          {NAV.map((g) => (
+          {visibleNav.map((g) => (
             <div className="nav-group" key={g.group}>
               <div className="nav-group-label">{g.group}</div>
               {g.items.map((item) => (

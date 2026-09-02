@@ -6,7 +6,7 @@
  * for, and once the session exists the same URL renders. Deep links therefore
  * survive both a reload and a sign-in.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactElement } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { api, apiSend, errorMessage, setCsrf, setUnauthorizedHandler } from "./lib/api.js";
 import { resetCache } from "./lib/usePolled.js";
@@ -25,9 +25,14 @@ import { Libraries } from "./pages/Libraries.js";
 import { Mounts } from "./pages/Mounts.js";
 import { Services } from "./pages/Services.js";
 import { Settings } from "./pages/Settings.js";
+import { Users } from "./pages/Users.js";
 import { NotFound } from "./pages/NotFound.js";
 
-interface Me { authenticated: boolean; needsSetup: boolean; csrfToken: string | null }
+interface Me { authenticated: boolean; needsSetup: boolean; csrfToken: string | null; role: "admin" | "member" | null }
+
+function RequireAdmin({ role, children }: { role: Me["role"]; children: ReactElement }) {
+  return role === "admin" ? children : <Navigate to="/requests" replace />;
+}
 
 export function App() {
   const [me, setMe] = useState<Me | null>(null);
@@ -92,19 +97,20 @@ export function App() {
 
   return (
     <Routes>
-      <Route element={<Layout onLogout={logout} />}>
-        <Route path="/" element={<Dashboard />} />
-        <Route path="/get" element={<Acquire />} />
-        <Route path="/search" element={<Search />} />
+      <Route element={<Layout onLogout={logout} role={me.role} />}>
+        <Route path="/" element={<RequireAdmin role={me.role}><Dashboard /></RequireAdmin>} />
+        <Route path="/get" element={<RequireAdmin role={me.role}><Acquire /></RequireAdmin>} />
+        <Route path="/search" element={<RequireAdmin role={me.role}><Search /></RequireAdmin>} />
         <Route path="/downloads" element={<Downloads />} />
         <Route path="/queue" element={<Queue />} />
         <Route path="/requests" element={<Requests />} />
-        <Route path="/intake" element={<Intake />} />
+        <Route path="/intake" element={<RequireAdmin role={me.role}><Intake /></RequireAdmin>} />
         <Route path="/jobs" element={<Jobs />} />
-        <Route path="/libraries" element={<Libraries />} />
-        <Route path="/mounts" element={<Mounts />} />
-        <Route path="/services" element={<Services />} />
-        <Route path="/settings" element={<Settings />} />
+        <Route path="/libraries" element={<RequireAdmin role={me.role}><Libraries /></RequireAdmin>} />
+        <Route path="/mounts" element={<RequireAdmin role={me.role}><Mounts /></RequireAdmin>} />
+        <Route path="/services" element={<RequireAdmin role={me.role}><Services /></RequireAdmin>} />
+        <Route path="/settings" element={<RequireAdmin role={me.role}><Settings /></RequireAdmin>} />
+        <Route path="/users" element={<RequireAdmin role={me.role}><Users /></RequireAdmin>} />
         {/* Legacy hash-free aliases from the prototype's page names. */}
         <Route path="/dashboard" element={<Navigate to="/" replace />} />
         <Route path="*" element={<NotFound />} />
