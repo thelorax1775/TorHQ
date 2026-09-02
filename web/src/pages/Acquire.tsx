@@ -452,9 +452,25 @@ export function Acquire() {
                 </Alert>
               )}
               <div className="small muted mb-2">
-                {accepted.length} {plural(accepted.length, "release")} your profile accepts
+                {plural(accepted.length, "release")} your profile accepts
                 {rejected.length > 0 ? `, ${rejected.length} rejected` : ""}.
               </div>
+              {visible.length === 0 ? (
+                // Everything found was rejected and the toggle is off. An empty
+                // table under "111 rejected" reads as a failure; say what is
+                // actually true and where the releases went.
+                <EmptyState
+                  icon="filter"
+                  title="Nothing your quality profile accepts"
+                  message={
+                    `All ${rejected.length} releases were refused by ${SERVICE_META[prepared!.service].label}'s `
+                    + "quality profile — most often because the file you already have is as good or better. "
+                    + "Turn on “Show rejected” to see them and the reason for each; any of them can still "
+                    + "be grabbed as a deliberate override."
+                  }
+                  actions={<Button icon="filter" onClick={() => setShowRejected(true)}>Show rejected</Button>}
+                />
+              ) : (
               <TableWrap>
                 <table className="table">
                   <thead>
@@ -500,6 +516,7 @@ export function Acquire() {
                   </tbody>
                 </table>
               </TableWrap>
+              )}
             </>
           )}
         </Card>
