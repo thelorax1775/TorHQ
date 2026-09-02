@@ -63,7 +63,12 @@ export function requestRoutes(app: FastifyInstance, ctx: AppContext): void {
       }
       try {
         const created = await a.addSelected(body);
-        logActivity({ kind: "requested", service: kind, message: `Requested ${created.title}`, data: { id: created.id } });
+        logActivity({
+          kind: "requested",
+          service: kind,
+          message: `Requested ${created.title} (by ${req.session!.username})`,
+          data: { id: created.id },
+        });
         return { ok: true, id: created.id, title: created.title };
       } catch (e) {
         return reply.code(502).send({ error: (e as Error).message });
