@@ -38,35 +38,53 @@ export interface SessionCtx {
   sessionId: string;
   csrfToken: string;
   userId: number;
+  role: string;
+  username: string;
 }
 
-export function createSession(userId: number): SessionCtx {
+export function createSession(user: User): SessionCtx {
   const db = getDb();
   const sessionId = token();
   const csrfToken = token();
   db.insert(sessions).values({
     id: sessionId,
-    userId,
+    userId: user.id,
     csrfToken,
     expiresAt: Date.now() + SESSION_TTL_MS,
   }).run();
-  return { sessionId, csrfToken, userId };
+  return { sessionId, csrfToken, userId: user.id, role: user.role, username: user.username };
 }
 
 export function getSession(sessionId: string | undefined): SessionCtx | null {
   if (!sessionId) return null;
   const db = getDb();
-  const row = db.select().from(sessions).where(eq(sessions.id, sessionId)).get();
+  const row = db
+    .select({
+      sessionId: sessions.id,
+      csrfToken: sessions.csrfToken,
+      userId: sessions.userId,
+      expiresAt: sessions.expiresAt,
+      role: users.role,
+      username: users.username,
+    })
+    .from(sessions)
+    .innerJoin(users, eq(users.id, sessions.userId))
+    .where(eq(sessions.id, sessionId))
+    .get();
   if (!row) return null;
   if (row.expiresAt < Date.now()) {
     db.delete(sessions).where(eq(sessions.id, sessionId)).run();
     return null;
   }
-  return { sessionId: row.id, csrfToken: row.csrfToken, userId: row.userId };
+  return { sessionId: row.sessionId, csrfToken: row.csrfToken, userId: row.userId, role: row.role, username: row.username };
 }
 
 export function destroySession(sessionId: string): void {
   getDb().delete(sessions).where(eq(sessions.id, sessionId)).run();
+}
+
+export function destroySessionsForUser(userId: number): void {
+  getDb().delete(sessions).where(eq(sessions.userId, userId)).run();
 }
 
 export function purgeExpiredSessions(): void {

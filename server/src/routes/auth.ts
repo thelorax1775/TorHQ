@@ -36,7 +36,7 @@ export function authRoutes(app: FastifyInstance, ctx: AppContext): void {
     if (adminExists()) return reply.code(409).send({ error: "admin already exists" });
     const body = Credentials.parse(req.body);
     const user = await createAdmin(body.username, body.password);
-    const s = createSession(user.id);
+    const s = createSession(user);
     reply.setCookie(SESSION_COOKIE, s.sessionId, cookieOpts);
     return { username: user.username, csrfToken: s.csrfToken };
   });
@@ -45,7 +45,7 @@ export function authRoutes(app: FastifyInstance, ctx: AppContext): void {
     const body = Credentials.parse(req.body);
     const user = await authenticate(body.username, body.password);
     if (!user) return reply.code(401).send({ error: "invalid credentials" });
-    const s = createSession(user.id);
+    const s = createSession(user);
     reply.setCookie(SESSION_COOKIE, s.sessionId, cookieOpts);
     return { username: user.username, csrfToken: s.csrfToken };
   });

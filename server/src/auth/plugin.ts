@@ -10,6 +10,7 @@ declare module "fastify" {
 /**
  * Attaches session (if any) to the request, and exposes guards:
  *  - requireAuth: 401 if no valid session
+ *  - requireAdmin: 401 with no session, 403 if the session isn't an admin
  *  - requireCsrf: double-submit CSRF check for mutating requests
  */
 export async function authPlugin(app: FastifyInstance): Promise<void> {
@@ -27,6 +28,16 @@ export async function authPlugin(app: FastifyInstance): Promise<void> {
     }
   });
 
+  app.decorate("requireAdmin", async (req: FastifyRequest, reply: FastifyReply) => {
+    if (!req.session) {
+      reply.code(401).send({ error: "authentication required" });
+      return;
+    }
+    if (req.session.role !== "admin") {
+      reply.code(403).send({ error: "admin access required" });
+    }
+  });
+
   app.decorate("requireCsrf", async (req: FastifyRequest, reply: FastifyReply) => {
     if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return;
     const header = req.headers["x-csrf-token"];
@@ -39,6 +50,7 @@ export async function authPlugin(app: FastifyInstance): Promise<void> {
 declare module "fastify" {
   interface FastifyInstance {
     requireAuth: (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    requireAdmin: (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
     requireCsrf: (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
   }
 }
