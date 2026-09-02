@@ -10,12 +10,13 @@ import { NavidromeAdapter } from "./navidrome.js";
 import { KavitaAdapter } from "./kavita.js";
 import { TorrentSearchAdapter } from "./torrentsearch.js";
 import { WebSearchAdapter } from "./websearch.js";
+import { GeminiAdapter } from "./gemini.js";
 import type { AdapterConfig, HealthResult, ServiceAdapter } from "./types.js";
 
 export type AnyAdapter =
   | ArrAdapter | QbittorrentAdapter | ProwlarrAdapter | SlskdAdapter
   | JellyfinAdapter | NavidromeAdapter | KavitaAdapter | TorrentSearchAdapter
-  | WebSearchAdapter;
+  | WebSearchAdapter | GeminiAdapter;
 
 function build(kind: string, cfg: AdapterConfig): AnyAdapter {
   switch (kind) {
@@ -30,6 +31,7 @@ function build(kind: string, cfg: AdapterConfig): AnyAdapter {
     case "kavita": return new KavitaAdapter(cfg);
     case "torrentsearch": return new TorrentSearchAdapter(cfg);
     case "websearch": return new WebSearchAdapter(cfg);
+    case "gemini": return new GeminiAdapter(cfg);
     default: throw new Error(`Unknown service kind: ${kind}`);
   }
 }

@@ -1,4 +1,4 @@
-import { httpJson } from "./http.js";
+import { httpJson, HttpError } from "./http.js";
 import type { AdapterConfig, ArrActivity, ArrCandidate, ArrItem, HealthResult, ServiceAdapter } from "./types.js";
 
 /**
@@ -95,6 +95,22 @@ export interface ArrRelease {
   /** Why it was refused, verbatim from the *arr. */
   rejections: string[];
   infoUrl?: string;
+}
+
+/**
+ * What an *arr's own parser made of a raw release name. `matchedId` is the one
+ * that matters: set means the *arr tied the release to a library entry, so a
+ * grab under its category will import.
+ */
+export interface ArrParseResult {
+  service: ArrFlavor;
+  title: string;
+  year?: number;
+  quality?: string;
+  /** Sonarr only — the season the release belongs to. */
+  seasonNumber?: number;
+  matchedId: number | null;
+  matchedTitle?: string;
 }
 
 /** A season of a series, for Sonarr's per-season interactive search. */
@@ -537,6 +553,85 @@ export class ArrAdapter implements ServiceAdapter {
     }));
   }
 
+  /**
+   * Ask the *arr what a raw release name refers to, using **its own parser** —
+   * the same one it runs when deciding whether to import something.
+   *
+   * This is the first and best rung of identification, and it is free: no LLM
+   * beats "the component that will actually perform the import already says it
+   * maps this exact string to movie 244". It handles far more than it looks
+   * like it should, including titles carrying a transliterated name alongside
+   * the English one.
+   *
+   * `matchedId` is the load-bearing field: when it is set, the *arr has tied the
+   * release to a library entry, and a grab under that *arr's category will
+   * import. When it is null the name parsed but matches nothing in the library —
+   * still useful, because `title`/`year` are then a good lookup term.
+   */
+  async parse(releaseName: string): Promise<ArrParseResult | null> {
+    let res: any;
+    try {
+      res = await httpJson<any>(this.cfg.baseUrl, this.api("parse"), {
+        headers: this.hdr(),
+        query: { title: releaseName },
+        timeoutMs: 20_000,
+      });
+    } catch (e) {
+      // Lidarr's parse surface has moved between builds; a 404 means "this *arr
+      // cannot answer", which is a null, not a failure of the whole ladder.
+      if (e instanceof HttpError && e.statusCode === 404) return null;
+      throw e;
+    }
+    return this.normalizeParse(res);
+  }
+
+  private normalizeParse(res: any): ArrParseResult | null {
+    if (!res || typeof res !== "object") return null;
+
+    if (this.kind === "radarr") {
+      const info = res.parsedMovieInfo;
+      const movie = res.movie;
+      if (!info && !movie) return null;
+      return {
+        service: this.kind,
+        title: info?.primaryMovieTitle ?? info?.movieTitle ?? movie?.title ?? "",
+        year: numberOrUndefined(info?.year ?? movie?.year),
+        quality: info?.quality?.quality?.name,
+        matchedId: typeof movie?.id === "number" && movie.id > 0 ? movie.id : null,
+        matchedTitle: movie?.title,
+      };
+    }
+
+    if (this.kind === "sonarr") {
+      const info = res.parsedEpisodeInfo;
+      const series = res.series;
+      if (!info && !series) return null;
+      return {
+        service: this.kind,
+        title: info?.seriesTitle ?? series?.title ?? "",
+        year: numberOrUndefined(info?.year ?? series?.year),
+        quality: info?.quality?.quality?.name,
+        // Sonarr searches a season at a time, so the parsed season is what makes
+        // an identified TV release actionable.
+        seasonNumber: numberOrUndefined(info?.seasonNumber),
+        matchedId: typeof series?.id === "number" && series.id > 0 ? series.id : null,
+        matchedTitle: series?.title,
+      };
+    }
+
+    const info = res.parsedAlbumInfo ?? res.parsedTrackInfo;
+    const artist = res.artist;
+    if (!info && !artist) return null;
+    return {
+      service: this.kind,
+      title: info?.artistName ?? artist?.artistName ?? "",
+      year: numberOrUndefined(info?.releaseYear),
+      quality: info?.quality?.quality?.name,
+      matchedId: typeof artist?.id === "number" && artist.id > 0 ? artist.id : null,
+      matchedTitle: artist?.artistName,
+    };
+  }
+
   async qualityProfiles(): Promise<Array<{ id: number; name: string }>> {
     return httpJson(this.cfg.baseUrl, this.api("qualityprofile"), { headers: this.hdr() });
   }
@@ -572,4 +667,9 @@ function pickPoster(images: any): string | undefined {
   if (!Array.isArray(images)) return undefined;
   const poster = images.find((i) => i?.coverType === "poster") ?? images[0];
   return poster?.remoteUrl ?? poster?.url ?? undefined;
+}
+
+/** A field that is only meaningful when it is actually a number. */
+function numberOrUndefined(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
 }

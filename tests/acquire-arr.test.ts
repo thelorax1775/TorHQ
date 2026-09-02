@@ -12,6 +12,7 @@ vi.mock("../server/src/adapters/http.js", () => ({
 }));
 
 const { ArrAdapter } = await import("../server/src/adapters/arr.js");
+const { HttpError } = await import("../server/src/adapters/http.js");
 
 const cfg = { baseUrl: "http://radarr:7878", secret: "RADARRKEY" };
 
@@ -211,5 +212,76 @@ describe("ArrAdapter.seasons / .albums", () => {
     expect(await new ArrAdapter("radarr", cfg).albums(1)).toEqual([]);
     expect(await new ArrAdapter("sonarr", cfg).albums(1)).toEqual([]);
     expect(httpJson).not.toHaveBeenCalled();
+  });
+});
+
+describe("ArrAdapter.parse — the *arr's own release-name parser", () => {
+  // Shapes trimmed from real GET /api/v3/parse responses against Radarr 6.3.0.
+  it("reads Radarr's parse and the library entry it matched", async () => {
+    httpJson.mockResolvedValueOnce({
+      parsedMovieInfo: {
+        primaryMovieTitle: "Avengers Endgame", year: 2019,
+        quality: { quality: { name: "Bluray-1080p" } },
+      },
+      movie: { id: 244, title: "Avengers: Endgame", year: 2019 },
+    });
+    const out = await new ArrAdapter("radarr", cfg).parse("Avengers.Endgame.2019.1080p.BluRay.x264-SPARKS");
+
+    expect(httpJson.mock.calls[0][1]).toBe("/api/v3/parse");
+    expect(httpJson.mock.calls[0][2].query).toEqual({ title: "Avengers.Endgame.2019.1080p.BluRay.x264-SPARKS" });
+    expect(out).toEqual({
+      service: "radarr", title: "Avengers Endgame", year: 2019,
+      quality: "Bluray-1080p", matchedId: 244, matchedTitle: "Avengers: Endgame",
+    });
+  });
+
+  it("reports a parse that matched nothing in the library as matchedId null", async () => {
+    // Still useful: the parsed title is a good lookup term. What must not happen
+    // is a falsy-but-present id being mistaken for a real match.
+    httpJson.mockResolvedValueOnce({
+      parsedMovieInfo: { primaryMovieTitle: "Some Film", year: 2024 },
+      movie: { id: 0 },
+    });
+    const out = await new ArrAdapter("radarr", cfg).parse("Some.Film.2024");
+    expect(out?.matchedId).toBeNull();
+    expect(out?.title).toBe("Some Film");
+  });
+
+  it("keeps the season from Sonarr's parse, which is what makes a TV hit actionable", async () => {
+    httpJson.mockResolvedValueOnce({
+      parsedEpisodeInfo: { seriesTitle: "Severance", seasonNumber: 2, quality: { quality: { name: "WEBDL-1080p" } } },
+      series: { id: 12, title: "Severance", year: 2022 },
+    });
+    const out = await new ArrAdapter("sonarr", cfg).parse("Severance.S02E01.1080p.WEB");
+    expect(out).toMatchObject({ service: "sonarr", seasonNumber: 2, matchedId: 12, matchedTitle: "Severance" });
+  });
+
+  it("uses Lidarr's v1 path and its artist shape", async () => {
+    httpJson.mockResolvedValueOnce({
+      parsedAlbumInfo: { artistName: "Radiohead", releaseYear: 2000 },
+      artist: { id: 3, artistName: "Radiohead" },
+    });
+    const out = await new ArrAdapter("lidarr", cfg).parse("Radiohead - Kid A (2000) FLAC");
+    expect(httpJson.mock.calls[0][1]).toBe("/api/v1/parse");
+    expect(out).toMatchObject({ service: "lidarr", title: "Radiohead", matchedId: 3 });
+  });
+
+  it("treats a 404 as 'this *arr cannot answer', not as a failure", async () => {
+    // Lidarr's parse surface has moved between builds. One *arr lacking it must
+    // not throw and take the whole identification ladder down with it.
+    const err: any = new HttpError("HTTP 404", 404);
+    httpJson.mockRejectedValueOnce(err);
+    await expect(new ArrAdapter("lidarr", cfg).parse("anything")).resolves.toBeNull();
+  });
+
+  it("propagates a real failure rather than silently reporting 'no idea'", async () => {
+    const err: any = new HttpError("HTTP 500", 500);
+    httpJson.mockRejectedValueOnce(err);
+    await expect(new ArrAdapter("radarr", cfg).parse("anything")).rejects.toBeTruthy();
+  });
+
+  it("returns null for a response with nothing parsed in it", async () => {
+    httpJson.mockResolvedValueOnce({});
+    await expect(new ArrAdapter("radarr", cfg).parse("!!!")).resolves.toBeNull();
   });
 });

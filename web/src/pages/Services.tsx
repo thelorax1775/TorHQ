@@ -63,6 +63,7 @@ const KIND_META: Record<string, { label: string; role: string; secretHint: strin
   kavita: { label: "Kavita", role: "Books/manga/comics library — an intake target.", secretHint: "API key", defaultUrl: "http://127.0.0.1:5000" },
   torrentsearch: { label: "Torrent-index search", role: "Fallback scraper for one mirror — only needed where Prowlarr has no indexer.", secretHint: "not required", defaultUrl: "https://" },
   websearch: { label: "Web search", role: "General web-search widget alongside torrent search.", secretHint: "not required", defaultUrl: "http://127.0.0.1:8080" },
+  gemini: { label: "Gemini", role: "Identifies raw-search release names the *arr parsers cannot read. Optional — the parsers handle most names alone.", secretHint: "API key", defaultUrl: "https://generativelanguage.googleapis.com" },
 };
 const meta = (kind: string) => KIND_META[kind] ?? { label: kind, role: "", secretHint: "", defaultUrl: "" };
 
@@ -89,6 +90,9 @@ type ExtraField =
 // Per-kind "extra" config, matching EXTRA_SCHEMAS in server/src/config/extra.ts
 // exactly — a kind with no entry here sends no extra at all.
 const EXTRA_FIELDS: Partial<Record<string, ExtraField[]>> = {
+  gemini: [
+    { key: "model", kind: "text", label: "Model", placeholder: "gemini-2.5-flash", hint: "Leave blank for the default. Test connection lists the models this key can actually reach, and names the mismatch if this one is not among them." },
+  ],
   kavita: [
     { key: "libraryId", kind: "number", label: "Kavita library ID (optional)", placeholder: "3", hint: "When set, intake triggers an explicit scan of this library after import." },
   ],

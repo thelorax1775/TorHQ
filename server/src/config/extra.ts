@@ -96,7 +96,19 @@ const ArrExtra = z.object({
   metadataProfileId: z.coerce.number().int().positive().optional(),
 });
 
+/**
+ * Gemini. The API key itself is the service `secret` (encrypted at rest like
+ * every other credential), so the only thing configurable here is which model
+ * to use. It is a free-text field rather than an enum on purpose: model names
+ * change faster than this file does, and the connection test enumerates what
+ * the key can actually reach, so a wrong name is reported rather than guessed.
+ */
+const GeminiExtra = z.object({
+  model: z.string().max(128).optional(),
+});
+
 const EXTRA_SCHEMAS: Partial<Record<string, z.ZodTypeAny>> = {
+  gemini: GeminiExtra,
   radarr: ArrExtra,
   sonarr: ArrExtra,
   lidarr: ArrExtra,

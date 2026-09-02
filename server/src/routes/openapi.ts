@@ -56,6 +56,47 @@ export const openApiDoc = {
       },
       Ok: { type: "object", properties: { ok: { type: "boolean" } } },
       ArrService: { type: "string", enum: ["radarr", "sonarr", "lidarr"] },
+      IdentifyInput: {
+        type: "object",
+        required: ["release"],
+        properties: { release: { type: "string", maxLength: 512, description: "The raw torrent release name." } },
+      },
+      IdentifyBatchInput: {
+        type: "object",
+        required: ["releases"],
+        properties: {
+          releases: { type: "array", minItems: 1, maxItems: 30, items: { type: "string", maxLength: 512 } },
+        },
+      },
+      Identification: {
+        type: "object",
+        description: "What a raw release name was identified as, and by whom.",
+        properties: {
+          release: { type: "string", description: "Echoed, so a batch answer can be matched to its request." },
+          source: {
+            type: "string", enum: ["arr-parse", "gemini", "none"],
+            description: "Which rung answered. 'arr-parse' is authoritative; 'gemini' is a model's proposal.",
+          },
+          service: { oneOf: [{ $ref: "#/components/schemas/ArrService" }, { type: "null" }] },
+          title: { type: "string" },
+          year: { type: "integer" },
+          seasonNumber: { type: "integer", description: "Sonarr only." },
+          libraryId: {
+            type: ["integer", "null"],
+            description:
+              "Set when the *arr already holds this in its library - the strong case, where a grab under " +
+              "that *arr's category will import with no add step.",
+          },
+          libraryTitle: { type: "string" },
+          candidates: {
+            type: "array",
+            description: "Lookup candidates when it is NOT already in the library. The user picks one.",
+            items: { $ref: "#/components/schemas/AcquireCandidate" },
+          },
+          confidence: { type: "number", description: "1 for a library match; the model's own estimate for a Gemini answer." },
+          detail: { type: "string", description: "Human-readable explanation, naming whose answer this is." },
+        },
+      },
       AcquireCandidate: {
         type: "object",
         description: "A lookup match, carrying the *arr it belongs to so one list can span all three.",
@@ -638,6 +679,50 @@ export const openApiDoc = {
           "400": errorResponse("invalid magnet / missing guid+indexerId / unknown target"),
           "409": errorResponse("the source or qBittorrent is not configured"),
           "502": errorResponse("prowlarr or qBittorrent rejected/unreachable"),
+        },
+      },
+    },
+    "/api/identify/status": {
+      get: {
+        summary: "Which parsers are live, and whether Gemini is configured",
+        security: [{ cookieAuth: [] }],
+        responses: { "200": { description: "OK" } },
+      },
+    },
+    "/api/identify": {
+      post: {
+        summary: "Identify one raw torrent release name",
+        description:
+          "Three rungs, cheapest and most authoritative first: (1) each *arr's own /parse - free, " +
+          "deterministic, and the same parser that performs imports, so a library match is a guarantee; " +
+          "(2) a parse that read the name but matched nothing becomes a lookup term; (3) Gemini, ONLY for " +
+          "names no parser could read, and only when configured. The model never decides what something " +
+          "is - it produces a search term, the *arr's lookup produces candidates, and a person confirms. " +
+          "A POST behind CSRF rather than a GET because rung 3 can spend money.",
+        security: [{ cookieAuth: [], csrfToken: [] }],
+        parameters: [csrfHeader],
+        requestBody: jsonBody("IdentifyInput"),
+        responses: {
+          "200": jsonOk("Identification"),
+          "400": errorResponse("invalid body"),
+        },
+      },
+    },
+    "/api/identify/batch": {
+      post: {
+        summary: "Identify a page of release names in one request",
+        description:
+          "Names are de-duplicated and answers cached for 30 minutes per exact release name, so a " +
+          "re-render or a second look at the same search costs nothing. Capped at 30 names per request, " +
+          "which is what stops a careless or crafted call becoming a hundred model invocations.",
+        security: [{ cookieAuth: [], csrfToken: [] }],
+        parameters: [csrfHeader],
+        requestBody: jsonBody("IdentifyBatchInput"),
+        responses: {
+          "200": { description: "OK", content: { "application/json": { schema: { type: "object", properties: {
+            results: { type: "array", items: { $ref: "#/components/schemas/Identification" } },
+          } } } } },
+          "400": errorResponse("invalid body, or more than 30 releases"),
         },
       },
     },

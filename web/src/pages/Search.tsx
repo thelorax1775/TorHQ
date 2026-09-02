@@ -23,10 +23,14 @@ import { useMutation } from "../lib/useMutation.js";
 import { usePolled, type Polled } from "../lib/usePolled.js";
 import { ago, bytes, plural, titleCase } from "../lib/format.js";
 import {
-  Alert, Async, Badge, Button, Card, EmptyState, InlineStatus, PageHeader,
+  Alert, Async, Badge, Button, Card, Checkbox, EmptyState, InlineStatus, PageHeader,
   RefreshButton, StaleNotice, TableWrap, cx,
 } from "../components/ui.js";
 import { Icon, type IconName } from "../components/Icon.js";
+import {
+  IdentityBadge, RouteDialog, useIdentities,
+  type ArrService, type Identification, type RouteRequest,
+} from "../components/IdentifyRouting.js";
 
 type SourceId = "prowlarr" | "site" | "web";
 
@@ -125,6 +129,11 @@ export function Search() {
   const [target, setTarget] = useState<GrabTarget>("radarr");
   const [rowStatus, setRowStatus] = useState<Record<string, { tone: "ok" | "err"; text: string }>>({});
   const [pendingRows, setPendingRows] = useState<Set<string>>(new Set());
+  // Identification is on by default: the *arr parsers answer most names for
+  // free, and Gemini is only reached for what they cannot read. The toggle
+  // exists for anyone who would rather it never reached a paid API at all.
+  const [identify, setIdentify] = useState(true);
+  const [routing, setRouting] = useState<RouteRequest | null>(null);
 
   const sourcesQ = usePolled<SourcesResponse>("/api/search/sources", 60000);
   // Static per source for the session; only re-subscribed (not re-fetched) when
@@ -147,6 +156,16 @@ export function Search() {
     (body: GrabRequestBody) => apiSend<GrabResponse>("/api/search/grab", "POST", body),
     { invalidates: ["/api/downloads", "/api/queue"] },
   );
+
+  // Every visible release name, identified in one batched request. Only the
+  // grabbable sources: a web result is a link to a page, not a release, and
+  // asking a model to identify one would spend money on a meaningless answer.
+  const visibleTitles = useMemo(() => {
+    const d = resultsQ.data;
+    if (!d || d.source === "web") return [];
+    return d.results.map((r) => r.title).filter(Boolean);
+  }, [resultsQ.data]);
+  const ids = useIdentities(visibleTitles, identify && source !== "web");
 
   const sourceInfo = (id: SourceId) => sourcesQ.data?.sources.find((s) => s.id === id);
   const selectedIndexerIds = useMemo(
@@ -360,16 +379,35 @@ export function Search() {
                         {TARGETS.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
                       </select>
                       <span className="small muted grow">{TARGETS.find((t) => t.id === target)!.hint}</span>
+                      <Checkbox
+                        label="Identify releases"
+                        checked={identify}
+                        onChange={setIdentify}
+                      />
                     </div>
+                    {identify && (
+                      <div className="small muted mb-2">
+                        <Icon name="info" size={12} />{" "}
+                        Each release is put through Radarr, Sonarr and Lidarr&rsquo;s own parsers first.
+                        Gemini is only asked about names none of them can read, and only when it is configured.
+                        <strong> Send to&hellip;</strong> adds the title to that *arr and grabs it there, so it
+                        imports and files itself &mdash; a plain <em>Grab</em> does not.
+                        {ids.error && <span className="err"> Identification failed: {ids.error}</span>}
+                      </div>
+                    )}
                     {data.source === "prowlarr"
-                      ? <ProwlarrTable results={data.results} target={target} pendingRows={pendingRows} rowStatus={rowStatus} onGrab={doGrab} />
-                      : <SiteTable results={data.results} target={target} pendingRows={pendingRows} rowStatus={rowStatus} onGrab={doGrab} />}
+                      ? <ProwlarrTable results={data.results} target={target} pendingRows={pendingRows} rowStatus={rowStatus} onGrab={doGrab} identities={identify ? ids.map : null} onRoute={setRouting} />
+                      : <SiteTable results={data.results} target={target} pendingRows={pendingRows} rowStatus={rowStatus} onGrab={doGrab} identities={identify ? ids.map : null} onRoute={setRouting} />}
                   </>
                 )}
               </Card>
             );
           }}
         </Async>
+      )}
+
+      {routing && (
+        <RouteDialog req={routing} onClose={() => setRouting(null)} />
       )}
 
       {resultsPath && <StaleNotice q={resultsQ} />}
@@ -400,9 +438,34 @@ interface GrabTableProps<T> {
   pendingRows: Set<string>;
   rowStatus: Record<string, { tone: "ok" | "err"; text: string }>;
   onGrab: (key: string, body: GrabRequestBody) => void;
+  /** null when identification is switched off. */
+  identities: Record<string, Identification> | null;
+  onRoute: (req: RouteRequest) => void;
 }
 
-function ProwlarrTable({ results, target, pendingRows, rowStatus, onGrab }: GrabTableProps<ProwlarrRelease>) {
+/**
+ * The badge under a release name, plus the routing action. Grabbing through an
+ * *arr uses the same /api/search/grab call as a plain grab, only with the
+ * target set to the *arr the release was identified as -- which now imports
+ * correctly, because RouteDialog guarantees the library entry first.
+ */
+function identityCell(
+  title: string,
+  identities: Record<string, Identification> | null,
+  onRoute: (req: RouteRequest) => void,
+  grabAs: (service: ArrService) => Promise<void>,
+) {
+  if (!identities) return null;
+  const id = identities[title];
+  if (id && id.source === "none") return null; // don't clutter rows nothing could read
+  return (
+    <div className="mt-2">
+      <IdentityBadge id={id} onRoute={() => id && onRoute({ id, grab: grabAs })} />
+    </div>
+  );
+}
+
+function ProwlarrTable({ results, target, pendingRows, rowStatus, onGrab, identities, onRoute }: GrabTableProps<ProwlarrRelease>) {
   return (
     <TableWrap>
       <table className="table">
@@ -430,6 +493,9 @@ function ProwlarrTable({ results, target, pendingRows, rowStatus, onGrab }: Grab
                     {r.categories.slice(0, 3).map((c) => <Badge key={c.id}>{c.name}</Badge>)}
                     {r.categories.length > 3 && <span>+{r.categories.length - 3}</span>}
                   </div>
+                  {identityCell(r.title, identities, onRoute, async (service) => {
+                    await onGrab(key, { ...prowlarrGrabBody(r, target), target: service });
+                  })}
                 </td>
                 <td className="num">{bytes(r.size)}</td>
                 <td className="num">
@@ -454,7 +520,7 @@ function ProwlarrTable({ results, target, pendingRows, rowStatus, onGrab }: Grab
   );
 }
 
-function SiteTable({ results, target, pendingRows, rowStatus, onGrab }: GrabTableProps<SiteResult>) {
+function SiteTable({ results, target, pendingRows, rowStatus, onGrab, identities, onRoute }: GrabTableProps<SiteResult>) {
   return (
     <TableWrap>
       <table className="table">
@@ -475,6 +541,9 @@ function SiteTable({ results, target, pendingRows, rowStatus, onGrab }: GrabTabl
                   <div className="break" title={r.title}>
                     {r.detailUrl ? <a href={r.detailUrl} target="_blank" rel="noreferrer noopener">{r.title}</a> : r.title}
                   </div>
+                  {identityCell(r.title, identities, onRoute, async (service) => {
+                    await onGrab(key, { ...siteGrabBody(r, target), target: service });
+                  })}
                 </td>
                 <td className="num">{bytes(r.sizeBytes)}</td>
                 <td className="num">

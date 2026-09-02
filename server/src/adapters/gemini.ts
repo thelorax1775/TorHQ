@@ -1,0 +1,200 @@
+import { httpJson } from "./http.js";
+import type { AdapterConfig, HealthResult, ServiceAdapter } from "./types.js";
+
+/**
+ * Google Gemini, used for exactly one job: turning a release name that the
+ * *arrs' own parsers could not resolve into a **search term**.
+ *
+ * The boundary is deliberate and load-bearing. Gemini never decides what a
+ * download is, never picks between candidates, and never touches a file. It
+ * proposes `{kind, title, year, season}`; that goes through the *arr's own
+ * lookup, and a person confirms. A hallucination therefore costs a bad
+ * suggestion — not the wrong film imported into the library under someone
+ * else's name and renamed to match.
+ *
+ * It is also the *last* resort, not the first: `ArrAdapter.parse()` answers
+ * most release names for free, deterministically, and with the same parser that
+ * will perform the import. See `lib/identify.ts` for the ladder.
+ */
+
+/** What the model is asked to extract. Deliberately small and checkable. */
+export interface ReleaseGuess {
+  /** Which *arr should own this, or `unknown` when the model cannot tell. */
+  kind: "movie" | "tv" | "music" | "unknown";
+  /** The work's title, with scene punctuation and release tags stripped. */
+  title: string;
+  year?: number;
+  /** TV only. */
+  season?: number;
+  /** The model's own confidence, 0–1, used only to sort and to warn. */
+  confidence: number;
+  /** One short sentence on why — shown to the user, never acted on. */
+  reasoning?: string;
+}
+
+const DEFAULT_MODEL = "gemini-2.5-flash";
+const DEFAULT_BASE = "https://generativelanguage.googleapis.com";
+
+/**
+ * A response schema, so the model returns parseable JSON rather than prose with
+ * a JSON block in it. `propertyOrdering` is not set: it affects only
+ * presentation, and we read by key.
+ */
+const RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    kind: { type: "STRING", enum: ["movie", "tv", "music", "unknown"] },
+    title: { type: "STRING" },
+    year: { type: "INTEGER" },
+    season: { type: "INTEGER" },
+    confidence: { type: "NUMBER" },
+    reasoning: { type: "STRING" },
+  },
+  required: ["kind", "title", "confidence"],
+} as const;
+
+const SYSTEM_PROMPT = [
+  "You identify what a torrent release name refers to.",
+  "",
+  "Return ONLY the work's title as it would be catalogued, plus its year when the",
+  "name gives one. Strip resolution, source, codec, audio, language tags, release",
+  "group, and any bracketed site name. When a name carries a transliterated or",
+  "translated title alongside an English one, prefer the English one.",
+  "",
+  "kind: 'movie' for films, 'tv' for series (set season when the name gives one),",
+  "'music' for albums or discographies, 'unknown' when you genuinely cannot tell —",
+  "software, books, games, or a name too mangled to read.",
+  "",
+  "confidence is your own 0-1 estimate that the title is right. Be honest and use",
+  "low values freely; a low-confidence answer is useful and a confident wrong one",
+  "is not. Never invent a year you cannot see or infer.",
+].join("\n");
+
+export class GeminiAdapter implements ServiceAdapter {
+  readonly status = "functional" as const;
+  readonly kind = "gemini";
+
+  constructor(private cfg: AdapterConfig) {}
+
+  private get baseUrl(): string {
+    // The service row's baseUrl is optional here — Gemini is a public endpoint,
+    // and an operator who leaves the field blank means "the normal one".
+    return this.cfg.baseUrl?.trim() || DEFAULT_BASE;
+  }
+
+  get model(): string {
+    const m = this.cfg.extra?.model;
+    return typeof m === "string" && m.trim() ? m.trim() : DEFAULT_MODEL;
+  }
+
+  /** The key travels as a header, never in the query string — URLs get logged. */
+  private hdr() { return { "x-goog-api-key": this.cfg.secret }; }
+
+  /**
+   * List the models this key can actually reach. This is the health check
+   * because it costs no tokens and, more usefully, it is the only way to find
+   * out that a configured model name is one this key cannot use — which
+   * otherwise shows up as a failure on the first real request.
+   */
+  async models(): Promise<string[]> {
+    const res = await httpJson<{ models?: Array<{ name?: string; supportedGenerationMethods?: string[] }> }>(
+      this.baseUrl, "/v1beta/models", { headers: this.hdr(), query: { pageSize: 200 }, timeoutMs: 15_000 },
+    );
+    return (res.models ?? [])
+      // Only models that can answer a generateContent call are of any use here.
+      .filter((m) => !m.supportedGenerationMethods || m.supportedGenerationMethods.includes("generateContent"))
+      .map((m) => (m.name ?? "").replace(/^models\//, ""))
+      .filter(Boolean);
+  }
+
+  async health(): Promise<HealthResult> {
+    const start = Date.now();
+    try {
+      const available = await this.models();
+      const latencyMs = Date.now() - start;
+      if (!available.length) {
+        return { healthy: false, detail: "the key reached Google but can use no models", latencyMs };
+      }
+      // Name the mismatch rather than reporting a cheerful "healthy" that turns
+      // into a 404 on the first identification.
+      if (!available.includes(this.model)) {
+        return {
+          healthy: false,
+          detail: `model "${this.model}" is not available to this key — try: ${available.slice(0, 3).join(", ")}`,
+          latencyMs,
+        };
+      }
+      return { healthy: true, version: this.model, detail: `${available.length} models available`, latencyMs };
+    } catch (e) {
+      return { healthy: false, detail: (e as Error).message, latencyMs: Date.now() - start };
+    }
+  }
+
+  /**
+   * Identify one release name. Returns null when the model declines or answers
+   * something unusable — a null is a clean "no idea", which the caller can
+   * report honestly, and is always preferable to a fabricated guess.
+   */
+  async identify(releaseName: string): Promise<ReleaseGuess | null> {
+    const res = await httpJson<any>(
+      this.baseUrl, `/v1beta/models/${encodeURIComponent(this.model)}:generateContent`,
+      {
+        method: "POST",
+        headers: this.hdr(),
+        timeoutMs: 30_000,
+        body: {
+          systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+          contents: [{ role: "user", parts: [{ text: releaseName.slice(0, 512) }] }],
+          generationConfig: {
+            // Identification is not a creative task; the same name should give
+            // the same answer twice.
+            temperature: 0,
+            responseMimeType: "application/json",
+            responseSchema: RESPONSE_SCHEMA,
+            maxOutputTokens: 256,
+          },
+        },
+      },
+    );
+    return parseGuess(res);
+  }
+}
+
+/**
+ * Pull the guess out of a generateContent response and sanity-check it. The
+ * response schema makes well-formed JSON very likely but not certain — safety
+ * blocks, truncation and empty candidates all produce a valid response with no
+ * usable content — so every field is re-validated here rather than trusted.
+ */
+export function parseGuess(res: any): ReleaseGuess | null {
+  const text = res?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (typeof text !== "string" || !text.trim()) return null;
+
+  let raw: any;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return null;
+  }
+
+  const title = typeof raw?.title === "string" ? raw.title.trim() : "";
+  if (!title) return null; // a guess with no title identifies nothing
+
+  const kind = ["movie", "tv", "music", "unknown"].includes(raw?.kind) ? raw.kind : "unknown";
+  if (kind === "unknown") return null; // an honest refusal — treat it as one
+
+  const year = Number.isInteger(raw?.year) && raw.year > 1870 && raw.year < 2200 ? raw.year : undefined;
+  const season = Number.isInteger(raw?.season) && raw.season >= 0 && raw.season < 1000 ? raw.season : undefined;
+  const confidence = typeof raw?.confidence === "number" && raw.confidence >= 0 && raw.confidence <= 1
+    ? raw.confidence
+    : 0.5; // an unusable confidence becomes "no opinion", never "certain"
+
+  return {
+    kind,
+    title,
+    year,
+    season: kind === "tv" ? season : undefined,
+    confidence,
+    reasoning: typeof raw?.reasoning === "string" ? raw.reasoning.slice(0, 240) : undefined,
+  };
+}

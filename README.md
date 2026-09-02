@@ -32,6 +32,7 @@ over your \*arr apps' pipelines.
 - [Architecture](#architecture)
 - [The intake boundary](#the-intake-boundary-torhq-vs-the-arr)
 - [The Get page: one-stop acquisition](#the-get-page-one-stop-acquisition)
+- [Identifying raw releases](#identifying-raw-releases)
 - [Search, grab, and the import loop](#search-grab-and-the-import-loop)
 - [Local development](#local-development)
 - [Environment variables](#environment-variables)
@@ -50,6 +51,7 @@ over your \*arr apps' pipelines.
 | Area | Capability |
 | --- | --- |
 | **Dashboard** | Aggregated service health, qBittorrent downloads grouped by category, \*arr activity (history + wanted/missing), slskd downloads, storage usage, and failed-import surfacing. |
+| **Identify** | Raw search results are put through Radarr, Sonarr and Lidarr's **own parsers** — the same ones that perform imports — so a release row says what it is and offers to route it to the \*arr that will file it. **Gemini** (optional) handles only the names those parsers cannot read. |
 | **Get** | The one-stop loop. One box over all three \*arr lookups, then add-to-library, then that \*arr's **own interactive search** for releases (with its quality scoring and rejection reasons), then a grab the \*arr owns end to end. Because the library entry always exists first, the import and the final folder are guaranteed. |
 | **Requests** | Search Radarr/Sonarr/Lidarr, **choose the intended result**, and submit an add+search request. TorHQ asks; the \*arr does the work. |
 | **Search** | Three sources behind one page: **Prowlarr** (aggregated across every indexer), a scraped **torrent-index site**, and a general **web widget**. Grab a chosen release into a neutral `torhq-manual` category, or hand it to `radarr`/`sonarr`/`lidarr` so that \*arr adopts and imports it. |
@@ -211,6 +213,68 @@ memory and expire fifteen minutes after they finish; the durable work is the
 
 **Idempotent.** Preparing a title that is already in the library returns the
 existing entry rather than duplicating it, so re-running a flow is safe.
+
+---
+
+## Identifying raw releases
+
+**Get** works title-first, so identification is never in question there. **Raw
+search** is the opposite: a free-text query returns release *names*, and a name
+like `Мстители: Финал / Avengers: Endgame (2019) HDRip-iTunes` has to become
+"this is Avengers: Endgame, and Radarr owns it" before it can be routed anywhere.
+
+TorHQ does that with a three-rung ladder, cheapest and most reliable first.
+
+### 1. The \*arrs' own parsers
+
+`GET /api/v3/parse?title=<release name>` on each configured \*arr. Free,
+deterministic, and **authoritative in a way nothing else can be**: it is the same
+parser the \*arr runs when deciding whether to import something, so when it
+reports a library match, a grab under that \*arr's category *will* import.
+
+It also handles far more than it looks like it should. Both of these resolve to
+`Avengers: Endgame (2019)`, movie id 244, on a stock Radarr:
+
+```
+Avengers.Endgame.2019.1080p.BluRay.x264-SPARKS
+Мстители: Финал / Avengers: Endgame (2019) HDRip-iTunes
+```
+
+### 2. Parsed, but not in the library
+
+The parse read the name but the \*arr holds nothing matching it. The parsed title
+and year are then a good **lookup term**, so that goes to the \*arr's own lookup
+and you get candidates to choose from.
+
+### 3. Gemini — only for what rung 1 could not read at all
+
+Add a Gemini API key under **Services** (encrypted at rest, like every other
+credential) and names no parser can read go to the model, which returns
+`{kind, title, year, season}`.
+
+> **The model never decides.** It converts a mangled string into a *search term*.
+> The \*arr's own lookup produces the candidates, and **you** confirm which one it
+> is. That boundary is the whole safety argument: a hallucination costs you a bad
+> suggestion, not the wrong film imported into your library and renamed to match
+> someone else's title.
+
+A Gemini-sourced row is labelled as such, carries the model's own confidence, and
+its confirmation dialog makes you pick the title explicitly — a parser match with
+a library hit is one click, a model's guess is not.
+
+Gemini is **optional and last**. With no key configured, rungs 1 and 2 still work
+and cover the large majority of real release names; names they cannot read stay
+unidentified rather than being guessed at.
+
+### Cost
+
+The model is reached only for names both other rungs failed on, answers are
+cached for 30 minutes per exact release name, a batch is capped at 30 names, and
+identification is skipped entirely on the **Web** source. The **Identify
+releases** toggle on the Raw search toolbar turns the whole thing off.
+
+`GET /api/identify/status` reports which parsers are live and whether Gemini is
+configured.
 
 ---
 
@@ -496,8 +560,15 @@ on **Queue**. It lands in the root folder shown in step 2.
 Mechanism, and why the order matters, is in
 [The Get page](#the-get-page-one-stop-acquisition).
 
-**Raw search** — free-text search across the sources, for things the \*arr cannot
-identify. Pick a source, type a term, and every result row ends in a grab.
+**Raw search** — free-text search across the sources. Pick a source, type a term,
+and every result row ends in a grab.
+
+Each row is also **identified**: a badge under the release name says what it is
+and which \*arr owns it, with **Send to Radarr/Sonarr/Lidarr** beside it. That
+button adds the title to the \*arr first and *then* grabs, so it imports and
+files itself — a plain **Grab** does not. See
+[Identifying raw releases](#identifying-raw-releases) for how identification
+works and where Gemini fits.
 
 - **Prowlarr** aggregates every indexer you run. This is the one to reach for.
   Narrow it with the indexer and category filters when a search is too broad.
