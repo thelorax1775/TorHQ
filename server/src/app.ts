@@ -11,6 +11,7 @@ import { loggerOptions } from "./lib/logger.js";
 import { authPlugin } from "./auth/plugin.js";
 import { authRoutes } from "./routes/auth.js";
 import { setupRoutes } from "./routes/setup.js";
+import { userRoutes } from "./routes/users.js";
 import { requestRoutes } from "./routes/requests.js";
 import { searchRoutes } from "./routes/search.js";
 import { acquireRoutes } from "./routes/acquire.js";
@@ -69,6 +70,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   authRoutes(app, ctx);
   webhookRoutes(app, ctx);
   setupRoutes(app, ctx);
+  userRoutes(app, ctx);
   requestRoutes(app, ctx);
   searchRoutes(app, ctx);
   acquireRoutes(app, ctx);
