@@ -474,6 +474,10 @@ pre {
   min-width: 0;
 }
 .list-row:last-child { border-bottom: none; }
+.list-row.active {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
 .list-row .grow { flex: 1; min-width: 0; }
 
 /* 4.7 Forms ---------------------------------------------------------------- */
@@ -765,9 +769,12 @@ pre {
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .break { word-break: break-word; overflow-wrap: anywhere; }
 .clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.mb-2 { margin-bottom: var(--s2); }
 .mt-2 { margin-top: var(--s2); }
 .mt-3 { margin-top: var(--s3); }
 .mt-4 { margin-top: var(--s4); }
+.muted-row > td { opacity: 0.62; }
+.muted-row:hover > td { opacity: 1; }
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;

@@ -83,7 +83,23 @@ const WebSearchExtra = z.object({
   linkTemplates: z.string().max(2048).optional(),
 });
 
+/**
+ * Where an *arr should put things TorHQ adds to it, so the acquire flow doesn't
+ * have to ask on every grab. Nothing here is secret, and nothing is required:
+ * with no default saved the acquire page falls back to the *arr's first root
+ * folder and first quality profile, and always shows which it picked.
+ */
+const ArrExtra = z.object({
+  rootFolderPath: z.string().max(512).optional(),
+  qualityProfileId: z.coerce.number().int().positive().optional(),
+  // Lidarr only, where adding an artist is impossible without one.
+  metadataProfileId: z.coerce.number().int().positive().optional(),
+});
+
 const EXTRA_SCHEMAS: Partial<Record<string, z.ZodTypeAny>> = {
+  radarr: ArrExtra,
+  sonarr: ArrExtra,
+  lidarr: ArrExtra,
   kavita: KavitaExtra,
   slskd: SlskdExtra,
   torrentsearch: TorrentSearchExtra,

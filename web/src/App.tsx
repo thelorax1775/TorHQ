@@ -14,6 +14,7 @@ import { Layout } from "./components/Layout.js";
 import { Button, Card } from "./components/ui.js";
 import { Login } from "./pages/Login.js";
 import { Dashboard } from "./pages/Dashboard.js";
+import { Acquire } from "./pages/Acquire.js";
 import { Search } from "./pages/Search.js";
 import { Downloads } from "./pages/Downloads.js";
 import { Queue } from "./pages/Queue.js";
@@ -93,6 +94,7 @@ export function App() {
     <Routes>
       <Route element={<Layout onLogout={logout} />}>
         <Route path="/" element={<Dashboard />} />
+        <Route path="/get" element={<Acquire />} />
         <Route path="/search" element={<Search />} />
         <Route path="/downloads" element={<Downloads />} />
         <Route path="/queue" element={<Queue />} />

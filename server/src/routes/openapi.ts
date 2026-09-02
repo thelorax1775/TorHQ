@@ -55,6 +55,90 @@ export const openApiDoc = {
         },
       },
       Ok: { type: "object", properties: { ok: { type: "boolean" } } },
+      ArrService: { type: "string", enum: ["radarr", "sonarr", "lidarr"] },
+      AcquireCandidate: {
+        type: "object",
+        description: "A lookup match, carrying the *arr it belongs to so one list can span all three.",
+        properties: {
+          service: { $ref: "#/components/schemas/ArrService" },
+          selectionId: { type: "string", description: "Stable selector (tmdb:/tvdb:/mbid:) - never a list index." },
+          title: { type: "string" }, subtitle: { type: "string" },
+          year: { type: "integer" }, poster: { type: "string" }, overview: { type: "string" },
+          alreadyAdded: { type: "boolean", description: "Already in that *arr's library; preparing it will not duplicate." },
+        },
+      },
+      AcquirePrepareInput: {
+        type: "object",
+        required: ["service", "term", "selectionId"],
+        properties: {
+          service: { $ref: "#/components/schemas/ArrService" },
+          term: { type: "string", description: "The term the candidate came from; the lookup is re-run and matched on selectionId." },
+          selectionId: { type: "string" },
+          rootFolderPath: { type: "string", description: "Overrides the saved default for this grab only." },
+          qualityProfileId: { type: "integer" },
+          metadataProfileId: { type: "integer", description: "Lidarr only; required there." },
+          remember: { type: "boolean", description: "Persist these choices as this *arr's defaults." },
+        },
+      },
+      AcquireSearchInput: {
+        type: "object",
+        required: ["service", "id"],
+        properties: {
+          service: { $ref: "#/components/schemas/ArrService" },
+          id: { type: "integer", description: "The *arr library id returned by /prepare (movie/series/artist)." },
+          label: { type: "string" },
+          seasonNumber: { type: "integer", description: "Sonarr only, and REQUIRED there - it refuses a whole-series search." },
+          albumId: { type: "integer", description: "Lidarr only; narrows an artist-wide search to one album." },
+        },
+      },
+      AcquireGrabInput: {
+        type: "object",
+        required: ["service", "guid", "indexerId"],
+        properties: {
+          service: { $ref: "#/components/schemas/ArrService" },
+          guid: { type: "string", description: "The *arr's own handle for the release, from the search result." },
+          indexerId: { type: "integer" },
+          title: { type: "string" },
+          override: { type: "boolean", description: "The release was rejected by the quality profile and is being grabbed deliberately." },
+        },
+      },
+      AcquireDefaultsInput: {
+        type: "object",
+        required: ["service"],
+        properties: {
+          service: { $ref: "#/components/schemas/ArrService" },
+          rootFolderPath: { type: "string" },
+          qualityProfileId: { type: "integer" },
+          metadataProfileId: { type: "integer" },
+        },
+      },
+      ArrRelease: {
+        type: "object",
+        description: "One result of an *arr's interactive search - already parsed and scored against its quality profile.",
+        properties: {
+          guid: { type: "string" }, indexerId: { type: "integer" }, indexer: { type: "string" },
+          title: { type: "string" }, size: { type: "integer" },
+          seeders: { type: ["integer", "null"], description: "null when the indexer does not report it - never coerced to 0." },
+          leechers: { type: ["integer", "null"] },
+          protocol: { type: "string" }, quality: { type: "string" }, ageHours: { type: "number" },
+          rejected: { type: "boolean", description: "The *arr's profile would have refused this release." },
+          rejections: { type: "array", items: { type: "string" }, description: "Why, verbatim from the *arr." },
+          infoUrl: { type: "string" },
+        },
+      },
+      AcquireSearchJob: {
+        type: "object",
+        description: "A release search in progress. Poll GET /api/acquire/search/{id} until status leaves 'running'.",
+        properties: {
+          id: { type: "string", format: "uuid" },
+          service: { $ref: "#/components/schemas/ArrService" },
+          label: { type: "string" },
+          status: { type: "string", enum: ["running", "done", "error"] },
+          elapsedMs: { type: "integer" },
+          releases: { type: ["array", "null"], items: { $ref: "#/components/schemas/ArrRelease" } },
+          error: { type: ["string", "null"] },
+        },
+      },
       Credentials: {
         type: "object",
         required: ["username", "password"],
@@ -554,6 +638,132 @@ export const openApiDoc = {
           "400": errorResponse("invalid magnet / missing guid+indexerId / unknown target"),
           "409": errorResponse("the source or qBittorrent is not configured"),
           "502": errorResponse("prowlarr or qBittorrent rejected/unreachable"),
+        },
+      },
+    },
+    "/api/acquire/lookup": {
+      get: {
+        summary: "Find a title across the Radarr, Sonarr and Lidarr lookups at once",
+        description:
+          "Step 1 of the acquisition loop. One query fans out to all three *arr lookups - a term like " +
+          "'dune' is legitimately a film and a series - and each candidate carries the service it belongs " +
+          "to. An *arr that is down or unconfigured is listed in `unavailable`, never silently omitted.",
+        security: [{ cookieAuth: [] }],
+        parameters: [{ name: "q", in: "query", required: true, schema: { type: "string", maxLength: 256 } }],
+        responses: {
+          "200": { description: "OK", content: { "application/json": { schema: { type: "object", properties: {
+            candidates: { type: "array", items: { $ref: "#/components/schemas/AcquireCandidate" } },
+            unavailable: { type: "array", items: { type: "object", properties: {
+              service: { $ref: "#/components/schemas/ArrService" }, detail: { type: "string" },
+            } } },
+          } } } } },
+          "400": errorResponse("invalid query"),
+        },
+      },
+    },
+    "/api/acquire/defaults": {
+      get: {
+        summary: "Saved placement defaults per *arr, plus the live options they are chosen from",
+        security: [{ cookieAuth: [] }],
+        responses: { "200": { description: "OK" } },
+      },
+      put: {
+        summary: "Save one *arr's default root folder and quality profile",
+        security: [{ cookieAuth: [], csrfToken: [] }],
+        parameters: [csrfHeader],
+        requestBody: jsonBody("AcquireDefaultsInput"),
+        responses: {
+          "200": jsonOk("Ok", "Saved"),
+          "400": errorResponse("invalid body"),
+          "409": errorResponse("that *arr is not configured"),
+        },
+      },
+    },
+    "/api/acquire/prepare": {
+      post: {
+        summary: "Ensure the chosen title exists in its *arr, and return its library id",
+        description:
+          "Step 2, and the join that makes the whole loop work: an *arr will not import a download for " +
+          "something that is not in its library. Idempotent - a title already present returns its existing " +
+          "id rather than duplicating. Adds monitored but does NOT start an automatic search, so the *arr " +
+          "never races the user to grab something they did not pick. With no saved defaults it falls back " +
+          "to the *arr's first root folder and quality profile, and the response says which were used.",
+        security: [{ cookieAuth: [], csrfToken: [] }],
+        parameters: [csrfHeader],
+        requestBody: jsonBody("AcquirePrepareInput"),
+        responses: {
+          "200": { description: "Prepared", content: { "application/json": { schema: { type: "object", properties: {
+            ok: { type: "boolean" }, id: { type: "integer" }, title: { type: "string" },
+            service: { $ref: "#/components/schemas/ArrService" },
+            rootFolderPath: { type: "string" }, qualityProfileId: { type: "integer" },
+            metadataProfileId: { type: "integer" },
+          } } } } },
+          "400": errorResponse("invalid body"),
+          "409": errorResponse("that *arr is not configured, or has no root folder / quality profile"),
+          "502": errorResponse("the *arr rejected the add, or the candidate is no longer available"),
+        },
+      },
+    },
+    "/api/acquire/targets": {
+      get: {
+        summary: "What can be searched within a prepared title (Sonarr seasons, Lidarr albums)",
+        description: "Radarr answers kind 'none' - a movie is the unit of search.",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "service", in: "query", required: true, schema: { $ref: "#/components/schemas/ArrService" } },
+          { name: "id", in: "query", required: true, schema: { type: "integer" } },
+        ],
+        responses: {
+          "200": { description: "OK" },
+          "409": errorResponse("that *arr is not configured"),
+          "502": errorResponse("the *arr is unreachable"),
+        },
+      },
+    },
+    "/api/acquire/search": {
+      post: {
+        summary: "Start the *arr's own interactive search for releases",
+        description:
+          "Step 3. Returns a job token immediately rather than a result: the *arr queries every indexer in " +
+          "series and routinely runs for one to three minutes, which no browser request should hold open. " +
+          "Poll GET /api/acquire/search/{id}. Jobs are in-memory and expire 15 minutes after finishing.",
+        security: [{ cookieAuth: [], csrfToken: [] }],
+        parameters: [csrfHeader],
+        requestBody: jsonBody("AcquireSearchInput"),
+        responses: {
+          "200": jsonOk("AcquireSearchJob", "Search started"),
+          "400": errorResponse("invalid body, or a Sonarr search with no seasonNumber"),
+          "409": errorResponse("that *arr is not configured"),
+        },
+      },
+    },
+    "/api/acquire/search/{id}": {
+      get: {
+        summary: "Poll a release search",
+        security: [{ cookieAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        responses: {
+          "200": jsonOk("AcquireSearchJob"),
+          "404": errorResponse("no such search - most likely it expired; run it again"),
+        },
+      },
+    },
+    "/api/acquire/grab": {
+      post: {
+        summary: "Grab the chosen release through the *arr, so the *arr imports and files it",
+        description:
+          "Step 4, and the reason the content ends up in the right folder: the release goes into that *arr's " +
+          "own queue and download client, so the *arr tracks it, imports it on completion, renames it, and " +
+          "places it under its root folder. TorHQ never touches the file. A release the quality profile " +
+          "rejected can still be grabbed - a deliberate override, recorded as such in the activity log.",
+        security: [{ cookieAuth: [], csrfToken: [] }],
+        parameters: [csrfHeader],
+        requestBody: jsonBody("AcquireGrabInput"),
+        responses: {
+          "200": jsonOk("Ok", "The *arr accepted the release"),
+          "400": errorResponse("invalid body"),
+          "409": errorResponse("that *arr is not configured"),
+          "502": errorResponse("the *arr refused the release or is unreachable"),
         },
       },
     },

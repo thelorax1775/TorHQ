@@ -14,6 +14,13 @@ import type { AdapterConfig, ArrActivity, ArrCandidate, ArrItem, HealthResult, S
  */
 export type ArrFlavor = "radarr" | "sonarr" | "lidarr";
 
+/**
+ * A lookup candidate that remembers which *arr produced it. The acquire flow
+ * searches all three at once — "dune" is legitimately a film and a series — so
+ * the service has to travel with the candidate rather than with the query.
+ */
+export type ArrCandidateWithService = ArrCandidate & { service: ArrFlavor };
+
 const API_VERSION: Record<ArrFlavor, string> = { radarr: "v3", sonarr: "v3", lidarr: "v1" };
 /** Primary resource noun used for lookup + add. */
 const RESOURCE: Record<ArrFlavor, string> = { radarr: "movie", sonarr: "series", lidarr: "artist" };
@@ -61,6 +68,59 @@ export interface ArrQueueItem {
   outputPath?: string;
   /** ISO timestamp; absent on older *arr builds. */
   added?: string;
+}
+
+/**
+ * One release from an *arr's **interactive search** — the same call its own UI
+ * makes. Unlike a raw indexer result this has already been parsed and scored
+ * against the *arr's quality profile, which is where `rejected`/`rejections`
+ * come from: the *arr saying, in its own words, why it would not have taken
+ * this release automatically.
+ */
+export interface ArrRelease {
+  /** The *arr's own handle for this release; the only thing `grabRelease` needs. */
+  guid: string;
+  indexerId: number;
+  indexer: string;
+  title: string;
+  size: number;
+  /** Absent on usenet and on indexers that don't report it — null, never 0. */
+  seeders: number | null;
+  leechers: number | null;
+  protocol: string;
+  quality?: string;
+  ageHours?: number;
+  /** True when the *arr's profile would have refused this release. */
+  rejected: boolean;
+  /** Why it was refused, verbatim from the *arr. */
+  rejections: string[];
+  infoUrl?: string;
+}
+
+/** A season of a series, for Sonarr's per-season interactive search. */
+export interface ArrSeason {
+  seasonNumber: number;
+  monitored: boolean;
+  episodeFileCount?: number;
+  totalEpisodeCount?: number;
+}
+
+/** An album, for Lidarr's per-album interactive search. */
+export interface ArrAlbum {
+  id: number;
+  title: string;
+  year?: number;
+  monitored: boolean;
+}
+
+/** What identifies the thing being searched for, per flavor. */
+export interface ReleaseTarget {
+  /** The *arr's library id: movieId / seriesId / artistId. */
+  id: number;
+  /** Sonarr only, and required there — the *arr refuses a whole-series search. */
+  seasonNumber?: number;
+  /** Lidarr only; narrows an artist-wide search to one album. */
+  albumId?: number;
 }
 
 /** A download-client path as the *arr sees it vs. as the client reports it. */
@@ -363,6 +423,118 @@ export class ArrAdapter implements ServiceAdapter {
     // No importMode: the *arr's configured copy/hardlink behaviour stays authoritative.
     await this.command(name, { path: input.outputPath, downloadClientId: input.downloadId });
     return { command: name };
+  }
+
+  /**
+   * Run the *arr's **interactive search** for one library item and return what
+   * its indexers offered. This is the call that makes the acquisition loop
+   * close: every release here is one the *arr can grab into its own queue, so
+   * the import, rename and final placement that follow are entirely its own.
+   *
+   * Slow by nature — it queries every indexer synchronously, and 100+ results
+   * over two minutes is normal. Callers must not run it on a request the user
+   * is waiting on; see `lib/releaseSearch.ts`.
+   */
+  async releases(target: ReleaseTarget): Promise<ArrRelease[]> {
+    const res = await httpJson<any[]>(this.cfg.baseUrl, this.api("release"), {
+      headers: this.hdr(),
+      query: this.releaseQuery(target),
+      // Every indexer, in series, behind one HTTP call.
+      timeoutMs: 180_000,
+    });
+    return (Array.isArray(res) ? res : []).map((r) => this.normalizeRelease(r));
+  }
+
+  /**
+   * Which id the *arr wants for an interactive search. The flavors genuinely
+   * differ: Radarr takes a movie, Lidarr an artist or an album, and Sonarr
+   * refuses a whole-series search outright — it wants a season.
+   */
+  private releaseQuery(target: ReleaseTarget): Record<string, string | number> {
+    switch (this.kind) {
+      case "radarr":
+        return { movieId: target.id };
+      case "sonarr":
+        if (target.seasonNumber == null) {
+          throw new Error("Sonarr searches a season at a time — choose one first.");
+        }
+        return { seriesId: target.id, seasonNumber: target.seasonNumber };
+      case "lidarr":
+        return target.albumId != null ? { albumId: target.albumId } : { artistId: target.id };
+    }
+  }
+
+  private normalizeRelease(r: any): ArrRelease {
+    const rejections: string[] = Array.isArray(r?.rejections)
+      // Sonarr/Lidarr return objects ({ reason, type }); Radarr returns strings.
+      ? r.rejections.map((x: any) => (typeof x === "string" ? x : x?.reason)).filter(Boolean)
+      : [];
+    return {
+      guid: r.guid ?? "",
+      indexerId: r.indexerId ?? 0,
+      indexer: r.indexer ?? "unknown",
+      title: r.title ?? "untitled",
+      size: r.size ?? 0,
+      // A missing seeder count is unknown, not zero — sorting by "0 seeders"
+      // buries usenet and quiet-indexer results that are perfectly grabbable.
+      seeders: typeof r.seeders === "number" ? r.seeders : null,
+      leechers: typeof r.leechers === "number" ? r.leechers : null,
+      protocol: r.protocol ?? "unknown",
+      quality: r.quality?.quality?.name ?? undefined,
+      ageHours: typeof r.ageHours === "number" ? r.ageHours : undefined,
+      // `rejected` is authoritative when present; older builds only send the list.
+      rejected: typeof r.rejected === "boolean" ? r.rejected : rejections.length > 0,
+      rejections,
+      infoUrl: r.infoUrl || undefined,
+    };
+  }
+
+  /**
+   * Tell the *arr to grab a release it found itself. It goes into that *arr's
+   * own queue and download client, which is the whole point: the *arr tracks it,
+   * imports it on completion, and renames it into its root folder. TorHQ never
+   * sees the file.
+   *
+   * The *arr accepts a release its profile rejected — that is a deliberate
+   * override, exactly as its own UI allows.
+   */
+  async grabRelease(guid: string, indexerId: number): Promise<void> {
+    await httpJson(this.cfg.baseUrl, this.api("release"), {
+      method: "POST",
+      headers: this.hdr(),
+      body: { guid, indexerId },
+      // The *arr resolves the release against the indexer before answering.
+      timeoutMs: 120_000,
+    });
+  }
+
+  /** Sonarr: the seasons of a series, so one can be searched. */
+  async seasons(seriesId: number): Promise<ArrSeason[]> {
+    if (this.kind !== "sonarr") return [];
+    const s = await httpJson<{ seasons?: any[] }>(this.cfg.baseUrl, this.api(`series/${seriesId}`), {
+      headers: this.hdr(),
+    });
+    return (s.seasons ?? []).map((x) => ({
+      seasonNumber: x.seasonNumber,
+      monitored: !!x.monitored,
+      episodeFileCount: x.statistics?.episodeFileCount,
+      totalEpisodeCount: x.statistics?.totalEpisodeCount,
+    }));
+  }
+
+  /** Lidarr: the albums of an artist, so one can be searched. */
+  async albums(artistId: number): Promise<ArrAlbum[]> {
+    if (this.kind !== "lidarr") return [];
+    const res = await httpJson<any[]>(this.cfg.baseUrl, this.api("album"), {
+      headers: this.hdr(),
+      query: { artistId },
+    });
+    return (Array.isArray(res) ? res : []).map((a) => ({
+      id: a.id,
+      title: a.title ?? "untitled",
+      year: a.releaseDate ? new Date(a.releaseDate).getUTCFullYear() : undefined,
+      monitored: !!a.monitored,
+    }));
   }
 
   async qualityProfiles(): Promise<Array<{ id: number; name: string }>> {

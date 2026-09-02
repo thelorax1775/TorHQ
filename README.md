@@ -6,11 +6,13 @@ Sonarr, Lidarr, Prowlarr, qBittorrent, slskd, Jellyfin, Navidrome, and Kavita �
 plus a small, deliberately-scoped **manual intake** pipeline for content those
 tools don't manage (loose books, manga, and Soulseek music).
 
-It also closes the acquisition loop: **search** (via Prowlarr's indexers, a
-scraped torrent-index site, or a general web widget), **grab** the release you
-chose, **watch** it download in qBittorrent, and **verify** that the right \*arr
-adopted and imported it — all from one page set, without tab-hopping between five
-web UIs.
+It also closes the acquisition loop end to end. The **Get** page is the one-stop
+path: find the title, TorHQ adds it to the right \*arr, you pick a release from
+that \*arr's own interactive search, and the \*arr downloads, imports, renames and
+files it. Alongside it, **Raw search** keeps the free-text Prowlarr/site/web
+search for anything the \*arr cannot identify, **Downloads** and **Queue** show the
+transfer and the import, and **Pipeline health** says why an import stalled — all
+from one page set, without tab-hopping between five web UIs.
 
 TorHQ is built to sit quietly next to your existing stack. It **observes and
 requests**, and performs only explicit, user-initiated grabs — it does not take
@@ -29,6 +31,7 @@ over your \*arr apps' pipelines.
 - [What TorHQ does](#what-torhq-does)
 - [Architecture](#architecture)
 - [The intake boundary](#the-intake-boundary-torhq-vs-the-arr)
+- [The Get page: one-stop acquisition](#the-get-page-one-stop-acquisition)
 - [Search, grab, and the import loop](#search-grab-and-the-import-loop)
 - [Local development](#local-development)
 - [Environment variables](#environment-variables)
@@ -47,6 +50,7 @@ over your \*arr apps' pipelines.
 | Area | Capability |
 | --- | --- |
 | **Dashboard** | Aggregated service health, qBittorrent downloads grouped by category, \*arr activity (history + wanted/missing), slskd downloads, storage usage, and failed-import surfacing. |
+| **Get** | The one-stop loop. One box over all three \*arr lookups, then add-to-library, then that \*arr's **own interactive search** for releases (with its quality scoring and rejection reasons), then a grab the \*arr owns end to end. Because the library entry always exists first, the import and the final folder are guaranteed. |
 | **Requests** | Search Radarr/Sonarr/Lidarr, **choose the intended result**, and submit an add+search request. TorHQ asks; the \*arr does the work. |
 | **Search** | Three sources behind one page: **Prowlarr** (aggregated across every indexer), a scraped **torrent-index site**, and a general **web widget**. Grab a chosen release into a neutral `torhq-manual` category, or hand it to `radarr`/`sonarr`/`lidarr` so that \*arr adopts and imports it. |
 | **Downloads** | Full qBittorrent control — pause/resume/recheck, priority, category moves, and both flavours of removal, with the destructive one gated behind a typed confirmation. |
@@ -149,6 +153,64 @@ Every path is checked with defense-in-depth containment (lexical `..` collapse,
 prefix-aliasing-safe root check, and `realpath` symlink-escape rejection) against
 `TORHQ_APPROVED_ROOTS`. There are no destructive media operations beyond this one
 previewed, approved import.
+
+---
+
+## The Get page: one-stop acquisition
+
+**Get** is the page to use when you want something. It exists because of a
+sharp, unforgiving rule in every \*arr:
+
+> An \*arr will not import a download for something that is not in its library.
+
+Put a torrent in the `radarr` category for a film Radarr has never heard of and
+it is filed as *Unknown* in Activity. Nothing renames it. Nothing moves it. It
+sits in the download directory forever, and no error is raised anywhere — which
+is exactly the failure this page removes.
+
+So Get runs the steps in the only order that works:
+
+```
+1. lookup    one query -> Radarr + Sonarr + Lidarr lookups, in parallel
+                          "dune" is legitimately a film AND a series, so the
+                          service travels with each candidate, not the query
+        |
+2. prepare   add the chosen title to its *arr (root folder + quality profile),
+             monitored, WITHOUT an automatic search  ->  library id
+        |
+3. search    that *arr's OWN interactive search across its indexers
+             (Sonarr: one season; Lidarr: an album or the whole artist)
+        |
+4. grab      POST the release back to the *arr -> its queue, its download
+             client, its import, its rename, its root folder
+```
+
+After step 4 TorHQ is out of the way entirely. The \*arr owns the download from
+the first byte, so the import, the rename and the final placement are simply the
+\*arr doing what it always does — which is why the file ends up in the right
+folder instead of the download directory.
+
+**What you get from using the \*arr's own search** rather than a raw indexer
+query: every release is already parsed and scored against your quality profile.
+Releases the profile would refuse are listed separately with the \*arr's own
+words for why — *"Bluray-2160p is not wanted in profile"*, *"Existing file meets
+cutoff"* — and can still be grabbed as a deliberate override, exactly as the
+\*arr's own UI allows.
+
+**Placement.** Each \*arr has a default root folder and quality profile, shown on
+the confirm step and changeable per grab; tick *Remember* to save the choice.
+With nothing saved, TorHQ falls back to that \*arr's first root folder and first
+quality profile and tells you which it used. Nothing about placement is silent.
+
+**Timing.** An interactive search queries every indexer in series and routinely
+takes one to three minutes — on a real stack, 111 releases took over a minute. It
+therefore runs as a background job that the page polls, rather than a request
+held open across a reverse proxy that would kill it half way. Search jobs live in
+memory and expire fifteen minutes after they finish; the durable work is the
+\*arr's, and the \*arr already persists it.
+
+**Idempotent.** Preparing a title that is already in the library returns the
+existing entry rather than duplicating it, so re-running a flow is safe.
 
 ---
 
@@ -415,8 +477,27 @@ blanking the page.
 
 ### Acquire
 
-**Search** — the main event. Pick a source, type a term, and every result row
-ends in a grab.
+**Get** — the one-stop page, and the one to reach for by default.
+
+1. Type a title. Results come from all three \*arr lookups at once, each tagged
+   *Movie*, *TV* or *Music*, with the ones already in a library first.
+2. Pick one, check where it is going (root folder + quality profile, prefilled
+   from the saved defaults), and *Add and continue*. It is added monitored, with
+   no automatic search, so nothing is grabbed before you choose it.
+3. For TV pick a season; for music pick an album or search the whole artist.
+   Then the \*arr searches its indexers — a minute or three, with a live counter.
+4. Pick a release and *Grab*. Releases your quality profile accepts are listed
+   first; the rest are hidden behind *Show N rejected by the profile*, each with
+   the \*arr's reason, and grabbable anyway as an explicit override.
+
+From there the \*arr owns it: watch the transfer on **Downloads** and the import
+on **Queue**. It lands in the root folder shown in step 2.
+
+Mechanism, and why the order matters, is in
+[The Get page](#the-get-page-one-stop-acquisition).
+
+**Raw search** — free-text search across the sources, for things the \*arr cannot
+identify. Pick a source, type a term, and every result row ends in a grab.
 
 - **Prowlarr** aggregates every indexer you run. This is the one to reach for.
   Narrow it with the indexer and category filters when a search is too broad.
@@ -442,8 +523,9 @@ How a grab is actually routed, and what is accepted, is in
 [Search, grab, and the import loop](#search-grab-and-the-import-loop).
 
 > Grabbing into an \*arr's category only imports if that title is **added and
-> monitored** in the \*arr. Use **Requests** to add it first, or grab to
-> `torhq-manual` and handle it yourself.
+> monitored** in the \*arr — otherwise it is filed as *Unknown* and never
+> imported. Use **Get**, which guarantees the library entry exists before the
+> grab, or grab to `torhq-manual` and handle it yourself.
 
 **Downloads** — everything in qBittorrent. Filter by state or category, select
 rows for bulk pause/resume/recheck/priority/category moves. Two removals:
