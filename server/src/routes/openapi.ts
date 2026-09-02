@@ -689,6 +689,24 @@ export const openApiDoc = {
         responses: { "200": { description: "OK" } },
       },
     },
+    "/api/identify/models": {
+      get: {
+        summary: "The Gemini models this key can actually reach",
+        description:
+          "Enumerated live rather than hardcoded: model names change faster than a release does, and which " +
+          "of them a key may use is a property of the key. Powers the model picker in Services, which falls " +
+          "back to a free-text field when this cannot be fetched.",
+        security: [{ cookieAuth: [] }],
+        responses: {
+          "200": { description: "OK", content: { "application/json": { schema: { type: "object", properties: {
+            models: { type: "array", items: { type: "string" } },
+            current: { type: "string", description: "The model currently configured (or the default)." },
+          } } } } },
+          "409": errorResponse("Gemini is not configured"),
+          "502": errorResponse("the key was rejected, or Google is unreachable"),
+        },
+      },
+    },
     "/api/identify": {
       post: {
         summary: "Identify one raw torrent release name",

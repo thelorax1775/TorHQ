@@ -60,6 +60,27 @@ export function identifyRoutes(app: FastifyInstance, ctx: AppContext): void {
     };
   });
 
+  /**
+   * The models this key can actually reach, for the model picker in Services.
+   *
+   * Enumerated live rather than hardcoded: Google's model names change faster
+   * than this codebase does, and which of them a given key may use is a property
+   * of the key, not of the release. A stale hardcoded list is how you end up
+   * choosing a model that 404s on first use.
+   */
+  app.get("/api/identify/models", { preHandler: app.requireAuth }, async (_req, reply) => {
+    const gemini = getAdapter("gemini", ctx.masterKey) as GeminiAdapter | null;
+    if (!gemini) return reply.code(409).send({ error: "Gemini is not configured" });
+    try {
+      const models = await gemini.models();
+      return { models, current: gemini.model };
+    } catch (e) {
+      // The key is bad, or Google is unreachable. Either way the picker must
+      // degrade to a text field rather than presenting an empty dropdown.
+      return reply.code(502).send({ error: (e as Error).message });
+    }
+  });
+
   app.post("/api/identify", guard, async (req) => {
     const { release } = IdentifyBody.parse(req.body);
     return cachedIdentify(release, deps());

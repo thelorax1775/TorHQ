@@ -67,6 +67,64 @@ const KIND_META: Record<string, { label: string; role: string; secretHint: strin
 };
 const meta = (kind: string) => KIND_META[kind] ?? { label: kind, role: "", secretHint: "", defaultUrl: "" };
 
+/**
+ * A select populated by asking the service what it supports.
+ *
+ * Deliberately degrades rather than blocks: before the credential is saved, or
+ * when the upstream is unreachable, the list cannot be fetched -- and a picker
+ * that renders an empty dropdown in that state would make the field
+ * unfillable. It falls back to a free-text input and says why. A value already
+ * saved is always offered even if it is missing from the fetched list, so
+ * opening this page can never silently change what is configured.
+ */
+function RemoteSelectField(
+  { field, value, onChange }: {
+    field: Extract<ExtraField, { kind: "select-remote" }>;
+    value: string;
+    onChange: (v: string) => void;
+  },
+) {
+  const q = usePolled<Record<string, unknown>>(field.source);
+  const list = Array.isArray(q.data?.[field.listKey]) ? (q.data![field.listKey] as string[]) : null;
+
+  if (q.initial) {
+    // Plain text, no escape: a JSX attribute string is not a JS string literal,
+    // so a \u escape here would render as its own source text.
+    return <Field label={field.label} hint="Loading models"><input className="input" disabled value={value} /></Field>;
+  }
+
+  if (!list || list.length === 0) {
+    return (
+      <TextField
+        label={field.label}
+        hint={q.error ? `${field.emptyHint} (${q.error.message})` : field.emptyHint}
+        value={value}
+        placeholder={field.placeholder}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    );
+  }
+
+  // Keep a configured-but-unlisted value visible and selected, rather than
+  // silently snapping the form to something the user never chose.
+  const options = value && !list.includes(value) ? [value, ...list] : list;
+  return (
+    <SelectField
+      label={field.label}
+      hint={field.hint}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      <option value="">Default ({field.placeholder})</option>
+      {options.map((m) => (
+        <option key={m} value={m}>
+          {m}{value === m && !list.includes(m) ? " \u2014 not available to this key" : ""}
+        </option>
+      ))}
+    </SelectField>
+  );
+}
+
 /** How loudly a kind's row should read, driven entirely by the health check's
  *  own verdict — `detail` already carries the specific reason (timeout, 401,
  *  wrong port, …), so nothing here needs to guess at a message. */
@@ -85,13 +143,28 @@ type ExtraField =
   | { key: string; kind: "text" | "number"; label: string; hint?: string; placeholder?: string; secret?: boolean }
   | { key: string; kind: "checkbox"; label: string }
   | { key: string; kind: "select"; label: string; options: Array<{ value: string; label: string }> }
-  | { key: string; kind: "textarea"; label: string; hint?: string; placeholder?: string };
+  | { key: string; kind: "textarea"; label: string; hint?: string; placeholder?: string }
+  /**
+   * A select whose options come from the service itself, because the valid
+   * values are a property of the configured credential rather than of this
+   * release. `source` returns `{ <listKey>: string[] }`; while it is loading or
+   * failing, the field degrades to a plain text input so a hardcoded list can
+   * never be the thing that blocks a working configuration.
+   */
+  | { key: string; kind: "select-remote"; label: string; hint?: string; placeholder?: string;
+      source: string; listKey: string; emptyHint: string };
 
 // Per-kind "extra" config, matching EXTRA_SCHEMAS in server/src/config/extra.ts
 // exactly — a kind with no entry here sends no extra at all.
 const EXTRA_FIELDS: Partial<Record<string, ExtraField[]>> = {
   gemini: [
-    { key: "model", kind: "text", label: "Model", placeholder: "gemini-2.5-flash", hint: "Leave blank for the default. Test connection lists the models this key can actually reach, and names the mismatch if this one is not among them." },
+    {
+      key: "model", kind: "select-remote", label: "Model",
+      source: "/api/identify/models", listKey: "models",
+      placeholder: "gemini-2.5-flash",
+      hint: "Only the models this key can actually reach. Leave unset to use the default.",
+      emptyHint: "Could not list models \u2014 save the API key first, then reopen this page. Until then you can type a model name.",
+    },
   ],
   kavita: [
     { key: "libraryId", kind: "number", label: "Kavita library ID (optional)", placeholder: "3", hint: "When set, intake triggers an explicit scan of this library after import." },
@@ -370,6 +443,16 @@ export function Services() {
                       >
                         {f.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                       </SelectField>
+                    );
+                  }
+                  if (f.kind === "select-remote") {
+                    return (
+                      <RemoteSelectField
+                        key={f.key}
+                        field={f}
+                        value={strVal(extra[f.key])}
+                        onChange={(v) => setExtra((s) => ({ ...s, [f.key]: v }))}
+                      />
                     );
                   }
                   if (f.kind === "textarea") {
