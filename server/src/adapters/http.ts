@@ -25,6 +25,21 @@ function buildUrl(base: string, path: string, query?: HttpOptions["query"]): str
   return url.toString();
 }
 
+const SECRET_PARAM = /^(api_?key|apikey|key|token|access_token|auth|password|pass|secret)$/i;
+
+/** The URL with every credential-like query value masked, for messages a person or a log will see. */
+export function redactUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    for (const k of [...u.searchParams.keys()]) {
+      if (SECRET_PARAM.test(k)) u.searchParams.set(k, "REDACTED");
+    }
+    return u.toString();
+  } catch {
+    return url.replace(/([?&][^=&]*(?:key|token|pass|secret|auth)[^=&]*=)[^&]*/gi, "$1REDACTED");
+  }
+}
+
 /** Minimal typed HTTP client for adapters (JSON in/out, timeouts, errors). */
 export async function httpJson<T = unknown>(
   base: string,
@@ -50,7 +65,7 @@ export async function httpJson<T = unknown>(
     // 500 was too small: an upstream's JSON error body routinely exceeds it, and
     // a truncated body cannot be JSON.parsed -- so the actual reason for the
     // failure was being thrown away and replaced by the status line.
-    throw new HttpError(`HTTP ${res.statusCode} for ${url}`, res.statusCode, text.slice(0, 4000));
+    throw new HttpError(`HTTP ${res.statusCode} for ${redactUrl(url)}`, res.statusCode, text.slice(0, 4000));
   }
   if (!text) return undefined as T;
   try {

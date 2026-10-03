@@ -36,6 +36,23 @@ export function tmdbMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/**
+ * The API base to call. The website (themoviedb.org, www.themoviedb.org) is the
+ * URL people naturally paste, and it answers every API path with a 404, so it is
+ * mapped to the API host rather than left to fail.
+ */
+export function tmdbBase(configured: string | undefined): string {
+  const raw = configured?.trim();
+  if (!raw) return TMDB_DEFAULT_BASE;
+  try {
+    const host = new URL(raw).hostname.toLowerCase();
+    if (host === "themoviedb.org" || host === "www.themoviedb.org") return TMDB_DEFAULT_BASE;
+  } catch {
+    return TMDB_DEFAULT_BASE;
+  }
+  return raw;
+}
+
 type TmdbKind = "movie" | "tv";
 
 /** Genre names by id, per kind. They change about once a decade. */
