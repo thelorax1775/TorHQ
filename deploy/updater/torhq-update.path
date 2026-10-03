@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for TorHQ update requests from the web UI
+
+[Path]
+PathExists=/srv/torhq/data/update/request
+Unit=torhq-update.service
+
+[Install]
+WantedBy=multi-user.target

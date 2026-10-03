@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+WORKER=/usr/local/lib/torhq/update-worker.mjs
+TORHQ_USER="${TORHQ_USER:-torhq}"
+
+as_torhq() {
+  runuser -u "${TORHQ_USER}" -- env -i \
+    HOME=/srv/torhq \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    LANG=C.UTF-8 \
+    node "${WORKER}" "$@"
+}
+
+main() {
+  local action rc
+  action="$(as_torhq take)" || exit 1
+  [[ -n "${action}" ]] || exit 0
+
+  as_torhq "${action}"
+  rc=$?
+  [[ "${action}" == apply && ${rc} -eq 0 ]] || exit 0
+
+  systemctl restart torhq
+  as_torhq finish
+}
+
+main "$@"

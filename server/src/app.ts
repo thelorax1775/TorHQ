@@ -23,6 +23,7 @@ import { jobRoutes } from "./routes/jobs.js";
 import { statusRoutes } from "./routes/status.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 import { systemRoutes } from "./routes/system.js";
+import { updateRoutes } from "./routes/update.js";
 import { openApiRoutes } from "./routes/openapi.js";
 
 /**
@@ -82,6 +83,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   jobRoutes(app, ctx);
   statusRoutes(app, ctx);
   systemRoutes(app, ctx);
+  updateRoutes(app, ctx);
   openApiRoutes(app);
 
   // Serve built SPA if present (single-origin deployment).
