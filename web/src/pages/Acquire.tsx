@@ -15,6 +15,7 @@
  * so the *arr owns the download from the first byte.
  */
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { apiSend } from "../lib/api.js";
 import { useMutation } from "../lib/useMutation.js";
 import { usePolled } from "../lib/usePolled.js";
@@ -84,9 +85,16 @@ interface SearchJobView {
 }
 
 export function Acquire() {
-  const [term, setTerm] = useState("");
-  const [committed, setCommitted] = useState<string | null>(null);
+  // The Catalogue links here as `?q=<title>&service=<arr>&pick=<selectionId>`:
+  // the lookup runs straight away and the exact title is chosen once it answers.
+  const [searchParams] = useSearchParams();
+  const [term, setTerm] = useState(() => searchParams.get("q") ?? "");
+  const [committed, setCommitted] = useState<string | null>(() => searchParams.get("q")?.trim() || null);
   const [selected, setSelected] = useState<Candidate | null>(null);
+  const [pick, setPick] = useState(() => {
+    const id = searchParams.get("pick");
+    return id ? { selectionId: id, service: searchParams.get("service") } : null;
+  });
 
   // Placement, seeded from the saved defaults once a candidate is chosen.
   const [root, setRoot] = useState("");
@@ -127,6 +135,17 @@ export function Acquire() {
     if (searchQ.data && searchQ.data.status !== "running") setSearchDone(true);
   }, [searchQ.data]);
 
+  // Apply the Catalogue's pick once, when the lookup first answers. If the *arr
+  // didn't return that exact title the list is simply left for the user.
+  useEffect(() => {
+    if (!pick || !lookupQ.data) return;
+    const match = lookupQ.data.candidates.find(
+      (c) => c.selectionId === pick.selectionId && (!pick.service || c.service === pick.service),
+    );
+    if (match) setSelected(match);
+    setPick(null);
+  }, [pick, lookupQ.data]);
+
   const prepare = useMutation((body: unknown) => apiSend<Prepared>("/api/acquire/prepare", "POST", body));
   const startSearch = useMutation((body: unknown) => apiSend<SearchJobView>("/api/acquire/search", "POST", body));
   const grab = useMutation(
@@ -156,6 +175,7 @@ export function Acquire() {
   function runLookup() {
     const t = term.trim();
     if (!t) return;
+    setPick(null);
     setSelected(null);
     resetFrom("candidate");
     setCommitted(t);

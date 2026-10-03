@@ -45,12 +45,13 @@ const SearchQuery = z.object({
   limit: z.coerce.number().int().min(10).max(500).optional(),
 });
 
-// Where a grab may be tagged. `torhq-manual` = a raw grab TorHQ owns; the *arr
+// Where a grab may be tagged. `torhq-manual` = a raw grab TorHQ owns;
+// `torhq-games` = the same, kept apart because no *arr exists for games; the *arr
 // categories let the corresponding *arr adopt and import the download. A fixed
 // allowlist keeps arbitrary category strings out of qBittorrent.
-const GRAB_CATEGORIES = ["torhq-manual", "radarr", "sonarr", "lidarr"] as const;
+const GRAB_CATEGORIES = ["torhq-manual", "torhq-games", "radarr", "sonarr", "lidarr"] as const;
 /** Who should end up owning the download. */
-const GRAB_TARGETS = ["qbittorrent", "radarr", "sonarr", "lidarr"] as const;
+const GRAB_TARGETS = ["qbittorrent", "games", "radarr", "sonarr", "lidarr"] as const;
 
 /**
  * A release title as an indexer reported it. Used only to label the activity
@@ -91,13 +92,21 @@ type GrabTarget = (typeof GRAB_TARGETS)[number];
 /** `target` wins; `category` is the pre-multi-source spelling of the same thing. */
 function resolveTarget(body: z.infer<typeof GrabBody>): GrabTarget {
   if (body.target) return body.target;
-  if (body.category) return body.category === "torhq-manual" ? "qbittorrent" : body.category;
-  return "qbittorrent";
+  if (body.category === "torhq-manual") return "qbittorrent";
+  if (body.category === "torhq-games") return "games";
+  return body.category ?? "qbittorrent";
 }
 
 /** The qBittorrent category a target implies. */
 function categoryFor(target: GrabTarget): string {
-  return target === "qbittorrent" ? "torhq-manual" : target;
+  if (target === "qbittorrent") return "torhq-manual";
+  if (target === "games") return "torhq-games";
+  return target;
+}
+
+/** Targets an *arr adopts. The rest are raw downloads TorHQ adds to qBittorrent itself. */
+function isArrTarget(target: GrabTarget): target is keyof typeof ARR_CATEGORY {
+  return target in ARR_CATEGORY;
 }
 
 /** Probes must not hang the sources page — a slow mirror is an unavailable one. */
@@ -266,7 +275,7 @@ export function searchRoutes(app: FastifyInstance, ctx: AppContext): void {
 
       // 1. An *arr target: let Prowlarr push the release so the *arr owns the
       //    download end to end, then nudge that *arr to look for it.
-      if (target !== "qbittorrent") {
+      if (isArrTarget(target)) {
         try {
           await p.grab(body.guid!, body.indexerId!);
           return finish("prowlarr", await nudgeArr(target), `Prowlarr (${target})`);
@@ -275,7 +284,8 @@ export function searchRoutes(app: FastifyInstance, ctx: AppContext): void {
         }
       }
 
-      // 2. qBittorrent target: resolve the release to a URL TorHQ can add itself.
+      // 2. qBittorrent or games target: resolve the release to a URL TorHQ can
+      //    add itself.
       const qb = qbittorrent();
       if (!qb) return reply.code(409).send({ error: "qBittorrent is not configured" });
       let url: string;

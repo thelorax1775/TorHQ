@@ -82,7 +82,7 @@ type SearchResponse =
       degraded?: string;
     };
 
-type GrabTarget = "qbittorrent" | "radarr" | "sonarr" | "lidarr";
+type GrabTarget = "qbittorrent" | "games" | "radarr" | "sonarr" | "lidarr";
 interface GrabRequestBody {
   source: "prowlarr" | "site";
   target: GrabTarget;
@@ -107,6 +107,7 @@ const TARGETS: Array<{ id: GrabTarget; label: string; hint: string }> = [
   { id: "sonarr", label: "Sonarr", hint: "Sonarr will pick this up and import it once the download finishes." },
   { id: "lidarr", label: "Lidarr", hint: "Lidarr will pick this up and import it once the download finishes." },
   { id: "qbittorrent", label: "qBittorrent (manual)", hint: "Goes straight to qBittorrent under torhq-manual — nothing imports it automatically." },
+  { id: "games", label: "qBittorrent (games)", hint: "Goes straight to qBittorrent under torhq-games — no *arr manages games, so nothing imports it." },
 ];
 
 const PROVIDER_LABEL: Record<WebSearchResponse["provider"], string> = {
@@ -126,7 +127,12 @@ export function Search() {
   const page = Math.max(1, Number(searchParams.get("page") ?? "1") || 1);
 
   const [term, setTerm] = useState(q);
-  const [target, setTarget] = useState<GrabTarget>("radarr");
+  // `?target=` lets another page choose where grabs go — the Catalogue sends
+  // games here with `target=games`.
+  const [target, setTarget] = useState<GrabTarget>(() => {
+    const t = searchParams.get("target");
+    return TARGETS.some((d) => d.id === t) ? (t as GrabTarget) : "radarr";
+  });
   const [rowStatus, setRowStatus] = useState<Record<string, { tone: "ok" | "err"; text: string }>>({});
   const [pendingRows, setPendingRows] = useState<Set<string>>(new Set());
   // Identification is on by default: the *arr parsers answer most names for
@@ -417,7 +423,9 @@ export function Search() {
 
 /** Human-readable line for the per-row inline status once a grab resolves. */
 function grabSuccessText(data: GrabResponse): string {
-  const dest = data.category === "torhq-manual" ? "qBittorrent" : titleCase(data.category);
+  const dest = data.category === "torhq-manual" ? "qBittorrent"
+    : data.category === "torhq-games" ? "qBittorrent (games)"
+    : titleCase(data.category);
   return data.importTriggered ? `Sent to ${dest} — import triggered` : `Sent to ${dest}`;
 }
 

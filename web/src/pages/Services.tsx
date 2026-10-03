@@ -63,6 +63,8 @@ const KIND_META: Record<string, { label: string; role: string; secretHint: strin
   kavita: { label: "Kavita", role: "Books/manga/comics library — an intake target.", secretHint: "API key", defaultUrl: "http://127.0.0.1:5000" },
   torrentsearch: { label: "Torrent-index search", role: "Fallback scraper for one mirror — only needed where Prowlarr has no indexer.", secretHint: "not required", defaultUrl: "https://" },
   websearch: { label: "Web search", role: "General web-search widget alongside torrent search.", secretHint: "not required", defaultUrl: "http://127.0.0.1:8080" },
+  tmdb: { label: "TMDB", role: "Catalogue source for movies and TV. Free key from themoviedb.org → Settings → API; either the API key or the read access token works.", secretHint: "API key or read access token", defaultUrl: "https://api.themoviedb.org" },
+  rawg: { label: "RAWG", role: "Catalogue source for games. Free key from rawg.io/apidocs.", secretHint: "API key", defaultUrl: "https://api.rawg.io" },
   gemini: { label: "Gemini", role: "Identifies raw-search release names the *arr parsers cannot read. Optional — the parsers handle most names alone.", secretHint: "API key", defaultUrl: "https://generativelanguage.googleapis.com" },
 };
 const meta = (kind: string) => KIND_META[kind] ?? { label: kind, role: "", secretHint: "", defaultUrl: "" };

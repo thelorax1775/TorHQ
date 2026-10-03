@@ -306,6 +306,26 @@ export class ArrAdapter implements ServiceAdapter {
     return (res.directories ?? []).map((d) => d.path ?? "").filter(Boolean);
   }
 
+  /**
+   * TMDB ids of everything in the library, for the Catalogue's "in library"
+   * badge. Radarr keys movies on TMDB; Sonarr v4 records a series' TMDB id
+   * alongside its TVDB one (v3 does not, and its shows simply go unbadged).
+   * Lidarr has no TMDB ids at all.
+   */
+  async libraryTmdbIds(): Promise<Set<number>> {
+    if (this.kind === "lidarr") return new Set();
+    const res = await httpJson<any[]>(this.cfg.baseUrl, this.api(RESOURCE[this.kind]), {
+      headers: this.hdr(),
+      // A large library is a large payload; give it longer than a status call.
+      timeoutMs: 20_000,
+    });
+    const ids = new Set<number>();
+    for (const r of Array.isArray(res) ? res : []) {
+      if (typeof r?.tmdbId === "number" && r.tmdbId > 0) ids.add(r.tmdbId);
+    }
+    return ids;
+  }
+
   private lookupPath(): string { return this.api(`${RESOURCE[this.kind]}/lookup`); }
 
   private async lookup(term: string): Promise<any[]> {

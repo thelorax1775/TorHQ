@@ -31,6 +31,7 @@ over your \*arr apps' pipelines.
 - [What TorHQ does](#what-torhq-does)
 - [Architecture](#architecture)
 - [The intake boundary](#the-intake-boundary-torhq-vs-the-arr)
+- [The Catalogue: browse movies, TV and games](#the-catalogue-browse-movies-tv-and-games)
 - [The Get page: one-stop acquisition](#the-get-page-one-stop-acquisition)
 - [Identifying raw releases](#identifying-raw-releases)
 - [Search, grab, and the import loop](#search-grab-and-the-import-loop)
@@ -52,6 +53,7 @@ over your \*arr apps' pipelines.
 | --- | --- |
 | **Dashboard** | Aggregated service health, qBittorrent downloads grouped by category, \*arr activity (history + wanted/missing), slskd downloads, storage usage, and failed-import surfacing. |
 | **Identify** | Raw search results are put through Radarr, Sonarr and Lidarr's **own parsers** — the same ones that perform imports — so a release row says what it is and offers to route it to the \*arr that will file it. **Gemini** (optional) handles only the names those parsers cannot read. |
+| **Catalogue** | Browse what's trending, popular, top rated and upcoming — movies and TV from **TMDB**, games from **RAWG** — with genre and platform filters, and the titles already in Radarr/Sonarr marked. One click hands a movie or show to **Get** (or **Requests**, for a member) with that exact title chosen; a game goes to a Prowlarr search over the game categories. |
 | **Get** | The one-stop loop. One box over all three \*arr lookups, then add-to-library, then that \*arr's **own interactive search** for releases (with its quality scoring and rejection reasons), then a grab the \*arr owns end to end. Because the library entry always exists first, the import and the final folder are guaranteed. |
 | **Requests** | Search Radarr/Sonarr/Lidarr, **choose the intended result**, and submit an add+search request. TorHQ asks; the \*arr does the work. |
 | **Search** | Three sources behind one page: **Prowlarr** (aggregated across every indexer), a scraped **torrent-index site**, and a general **web widget**. Grab a chosen release into a neutral `torhq-manual` category, or hand it to `radarr`/`sonarr`/`lidarr` so that \*arr adopts and imports it. |
@@ -157,6 +159,39 @@ prefix-aliasing-safe root check, and `realpath` symlink-escape rejection) agains
 previewed, approved import.
 
 ---
+
+## The Catalogue: browse movies, TV and games
+
+**Get** and **Requests** answer "I know what I want". The **Catalogue** answers
+"what's worth getting?" — a poster grid of what's trending, popular, top rated,
+in cinemas, on the air or coming soon, filterable by genre (and, for games, by
+platform), with a title search on top. Click anything for its details.
+
+| Kind | Source | What "get it" does |
+| --- | --- | --- |
+| Movies | [TMDB](https://www.themoviedb.org/settings/api) | Opens **Get** with the film already chosen, so Radarr adds, grabs, imports and files it. TMDB ids are what Radarr keys on, so the hand-off is exact, not a title match. |
+| TV | TMDB | Opens **Get** with the show chosen, via the TVDB id TMDB records for it, so Sonarr owns it from there. |
+| Games | [RAWG](https://rawg.io/apidocs) | Opens **Raw search** over Prowlarr's *Console* and *PC* categories with **Send grabs to** set to *qBittorrent (games)*. A grab lands in the `torhq-games` category. |
+
+**Games are not imported.** No \*arr manages games, so nothing renames or files
+a game once it has downloaded — it sits in qBittorrent's `torhq-games` category
+for you to deal with. The detail panel says so before you click.
+
+**Setup.** Both keys are free. Add them under **Services** as `tmdb` and `rawg`;
+they are encrypted at rest like every other credential. TMDB issues two
+credentials for one account — the short *API key* or the long *API Read Access
+Token* — and either works. A kind whose key is missing is shown with the reason,
+never hidden.
+
+**Members** can browse the catalogue too. For them the button on a movie or show
+is *Request*, which opens **Requests** with the title chosen; games show no
+button, since a member cannot search indexers.
+
+**What it costs you.** Browsing calls TMDB and RAWG from the server, but poster
+images load in the browser straight from `image.tmdb.org` and `media.rawg.io`,
+so those hosts see the viewer's IP. Titles already in Radarr/Sonarr are worked
+out by reading each library once a minute at most; if an \*arr is down the grid
+still loads, just without the *In library* badges.
 
 ## The Get page: one-stop acquisition
 
@@ -473,6 +508,8 @@ tells you.
    - Jellyfin — API token
    - Navidrome — `username:password`
    - Kavita — API key (optionally set a **library ID** to trigger explicit scans)
+   - tmdb — API key or read access token (Catalogue movies and TV; optional)
+   - rawg — API key (Catalogue games; optional)
    - torrentsearch — no secret; set the base URL to a torrent-index mirror and,
      if needed, override the site-profile selectors / add a Cloudflare solver URL
      (Byparr — see [the torrent site source](#configuring-a-mirror-and-why-its-fragile))
@@ -493,8 +530,9 @@ tells you.
    alone, which is what you want when importing off a seeding torrent.
 
 4. **Create qBittorrent categories.** One per *arr, plus one you own:
-   `radarr`, `sonarr`, `lidarr`, `torhq-manual`. The category is how a finished
-   download is attributed to the app that should import it.
+   `radarr`, `sonarr`, `lidarr`, `torhq-manual`, and `torhq-games` if you will
+   grab games from the Catalogue. The category is how a finished download is
+   attributed to the app that should import it.
 
 5. **Wire qBittorrent into each \*arr.** In Radarr/Sonarr/Lidarr →
    *Settings → Download Clients*, add qBittorrent, **set its category to the
@@ -541,6 +579,12 @@ blanking the page.
 
 ### Acquire
 
+**Catalogue** — browse instead of search. Pick *Movies*, *TV shows* or *Games*,
+then a list (*Trending*, *Popular*, *Top rated*, …), a genre, or type a title.
+Click a poster for details, then *Get* / *Request* / *Find releases*. Every
+filter is in the URL, so a view can be bookmarked. See
+[The Catalogue](#the-catalogue-browse-movies-tv-and-games).
+
 **Get** — the one-stop page, and the one to reach for by default.
 
 1. Type a title. Results come from all three \*arr lookups at once, each tagged
@@ -582,6 +626,7 @@ Set **Send grabs to** before you grab — it decides what happens next:
 | --- | --- |
 | Radarr / Sonarr / Lidarr | The release goes to that \*arr's category and the \*arr is asked to poll immediately, so it adopts and imports without waiting. |
 | qBittorrent (manual) | Lands in `torhq-manual`. Nothing imports it; it is yours to organize. |
+| qBittorrent (games) | Lands in `torhq-games`. Same as manual, kept separate; the Catalogue sets this for games. |
 
 The whole query — source, term, filters — lives in the URL, so a search is
 reloadable and shareable. `seeders: —` means the indexer reported no count; it
@@ -912,7 +957,7 @@ web/               React + Vite SPA
   src/lib/         the single data layer: usePolled / useMutation / format / prefs
   src/pages/       one file per route
 tests/             Vitest suites (crypto, paths, routing, intake, migrations,
-                   search, downloads, queue, pipeline)
+                   search, downloads, queue, pipeline, catalogue)
 scripts/           install / upgrade / backup
 deploy/            systemd unit + nginx reverse-proxy config
 docs/              API curl examples + the revamp contract
