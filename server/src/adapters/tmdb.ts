@@ -95,7 +95,7 @@ export class TmdbAdapter implements ServiceAdapter {
   constructor(private readonly cfg: AdapterConfig) {}
 
   private get base(): string {
-    return this.cfg.baseUrl || TMDB_DEFAULT_BASE;
+    return tmdbBase(this.cfg.baseUrl);
   }
 
   /** A v4 read token is a JWT; anything else is a v3 key. */
