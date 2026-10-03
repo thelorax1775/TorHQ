@@ -76,6 +76,13 @@ describe("TMDB adapter", () => {
     expect(httpJson.mock.calls[0]![2].query.api_key).toBeUndefined();
   });
 
+  it("calls the API host when the website URL is configured", async () => {
+    httpJson.mockResolvedValue({});
+    await new TmdbAdapter({ baseUrl: "https://www.themoviedb.org", secret: "website-url-key" }).health();
+    expect(httpJson.mock.calls[0]![0]).toBe("https://api.themoviedb.org");
+    expect(httpJson.mock.calls[0]![1]).toBe("3/configuration");
+  });
+
   it("browses trending by week, and a genre through discover", async () => {
     httpJson.mockImplementation(async (_b: string, path: string) =>
       path.startsWith("3/genre/") ? { genres: [] } : { page: 1, total_pages: 900, results: [MOVIE_ROW] });
