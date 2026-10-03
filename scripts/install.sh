@@ -83,6 +83,7 @@ fi
 
 systemctl daemon-reload
 systemctl enable torhq
+APP_DIR="${APP_DIR}" TORHQ_USER="${TORHQ_USER}" "${APP_DIR}/scripts/install-updater.sh"
 systemctl restart torhq
 
 echo "==> Done. Check status:  systemctl status torhq"

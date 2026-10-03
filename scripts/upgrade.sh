@@ -46,5 +46,6 @@ fi
 npm run migrate --workspace server
 
 chown -R torhq:torhq /srv/torhq
+"${APP_DIR}/scripts/install-updater.sh"
 systemctl restart torhq
 echo "Upgrade complete. journalctl -u torhq -f"

@@ -1,0 +1,12 @@
+[Unit]
+Description=TorHQ update from GitHub, requested from the web UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/torhq-update
+TimeoutStartSec=30min
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=torhq-update

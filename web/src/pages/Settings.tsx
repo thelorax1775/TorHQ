@@ -13,6 +13,7 @@ import { applyPrefs, loadPrefs, savePrefs, type Prefs, type Theme } from "../lib
 import {
   Alert, Async, Badge, Card, Field, LinkButton, PageHeader, Stat,
 } from "../components/ui.js";
+import { UpdateCard } from "../components/UpdateCard.js";
 
 interface RootsResponse { approvedRoots: string[] }
 interface HealthResponse { status: string; uptime: number }
@@ -141,6 +142,8 @@ export function Settings() {
           <Stat label="Approved roots" value={roots.data?.approvedRoots.length ?? "—"} />
         </div>
       </Card>
+
+      <UpdateCard />
 
       <Card
         title="Configured elsewhere"

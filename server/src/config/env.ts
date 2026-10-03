@@ -34,6 +34,7 @@ const EnvSchema = z.object({
   TORHQ_METRICS_ENABLED: envBool,
   // Secure cookie flag; enable when served over HTTPS.
   TORHQ_COOKIE_SECURE: envBool,
+  TORHQ_UPDATE_UNIT: z.string().default("/etc/systemd/system/torhq-update.path"),
   TORHQ_LOG_LEVEL: z.enum(["fatal","error","warn","info","debug","trace"]).default("info"),
 });
 
