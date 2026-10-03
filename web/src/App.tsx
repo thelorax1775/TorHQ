@@ -15,6 +15,7 @@ import { Button, Card } from "./components/ui.js";
 import { Login } from "./pages/Login.js";
 import { Dashboard } from "./pages/Dashboard.js";
 import { Acquire } from "./pages/Acquire.js";
+import { Catalogue } from "./pages/Catalogue.js";
 import { Search } from "./pages/Search.js";
 import { Downloads } from "./pages/Downloads.js";
 import { Queue } from "./pages/Queue.js";
@@ -99,6 +100,7 @@ export function App() {
     <Routes>
       <Route element={<Layout onLogout={logout} role={me.role} />}>
         <Route path="/" element={<RequireAdmin role={me.role}><Dashboard /></RequireAdmin>} />
+        <Route path="/catalogue" element={<Catalogue role={me.role} />} />
         <Route path="/get" element={<RequireAdmin role={me.role}><Acquire /></RequireAdmin>} />
         <Route path="/search" element={<RequireAdmin role={me.role}><Search /></RequireAdmin>} />
         <Route path="/downloads" element={<Downloads />} />

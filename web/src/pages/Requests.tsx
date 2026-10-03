@@ -6,7 +6,8 @@
  * and confirm. The *arr owns search, grab, import, rename, and placement from
  * there — this page's job ends at the POST.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { apiSend } from "../lib/api.js";
 import { useMutation } from "../lib/useMutation.js";
 import { usePolled } from "../lib/usePolled.js";
@@ -50,7 +51,19 @@ const ROUTE_DEFS: Array<{ id: RequestRoute; label: string; service: string; icon
 ];
 
 export function Requests() {
-  const [route, setRoute] = useState<RequestRoute>("movie");
+  // The Catalogue links here as `?route=<movie|tv>&q=<title>&pick=<selectionId>`
+  // so a member lands on the right tab with the exact title already chosen.
+  const [searchParams] = useSearchParams();
+  const [route, setRoute] = useState<RequestRoute>(() => {
+    const r = searchParams.get("route");
+    return ROUTE_DEFS.some((d) => d.id === r) ? (r as RequestRoute) : "movie";
+  });
+  // Held until the user changes tab themselves. Not cleared by the effect that
+  // reads it, so a re-run of that effect (StrictMode) seeds the same values.
+  const seed = useRef<{ q: string; pick: string | null } | null>(
+    searchParams.get("q")?.trim() ? { q: searchParams.get("q")!.trim(), pick: searchParams.get("pick") } : null,
+  );
+  const [pick, setPick] = useState<string | null>(null);
   const [term, setTerm] = useState("");
   const [committedTerm, setCommittedTerm] = useState<string | null>(null);
   const [profile, setProfile] = useState<number | "">("");
@@ -73,7 +86,8 @@ export function Requests() {
   // Switching routes starts over: a candidate/profile chosen for a movie means
   // nothing once the tab says "artist".
   useEffect(() => {
-    setTerm(""); setCommittedTerm(null); setSelected(null);
+    setTerm(seed.current?.q ?? ""); setCommittedTerm(seed.current?.q ?? null); setSelected(null);
+    setPick(seed.current?.pick ?? null);
     setProfile(""); setMetadataProfile(""); setRoot("");
     submit.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -89,9 +103,19 @@ export function Requests() {
     setMetadataProfile((m) => (m === "" && opts.metadataProfiles[0] ? opts.metadataProfiles[0].id : m));
   }, [optionsQ.data]);
 
+  // Choose the Catalogue's title once the lookup answers; if the *arr didn't
+  // return it, the list is left for the user to choose from.
+  useEffect(() => {
+    if (!pick || !searchQ.data) return;
+    const match = searchQ.data.candidates.find((c) => c.selectionId === pick);
+    if (match) setSelected(match);
+    setPick(null);
+  }, [pick, searchQ.data]);
+
   function runSearch() {
     const t = term.trim();
     if (!t) return;
+    setPick(null);
     setSelected(null);
     submit.reset();
     setCommittedTerm(t);
@@ -128,7 +152,7 @@ export function Requests() {
               type="button"
               className={cx("tab", route === r.id && "active")}
               aria-pressed={route === r.id}
-              onClick={() => setRoute(r.id)}
+              onClick={() => { seed.current = null; setRoute(r.id); }}
             >
               <Icon name={r.icon} size={14} />
               {r.label} → {r.service}

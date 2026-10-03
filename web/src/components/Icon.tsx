@@ -36,6 +36,7 @@ const PATHS = {
   filter: <><path d="M3.5 5.5h17l-6.6 7.7V20l-3.8-2.2v-4.6z" /></>,
   chevron: <><path d="m6 9.5 6 6 6-6" /></>,
   link: <><path d="M10.5 13.5a4 4 0 0 0 5.7 0l2.6-2.6a4 4 0 1 0-5.7-5.7l-1.3 1.3" /><path d="M13.5 10.5a4 4 0 0 0-5.7 0l-2.6 2.6a4 4 0 1 0 5.7 5.7l1.3-1.3" /></>,
+  grid: <><rect x="3" y="3" width="7.5" height="10" rx="1.5" /><rect x="13.5" y="3" width="7.5" height="10" rx="1.5" /><path d="M3 17h7.5M3 21h5M13.5 17H21M13.5 21h5" /></>,
   sliders: <><path d="M4 8h11M19 8h1M4 16h4M12 16h8" /><circle cx="17" cy="8" r="2" /><circle cx="10" cy="16" r="2" /></>,
 } satisfies Record<string, ReactNode>;
 

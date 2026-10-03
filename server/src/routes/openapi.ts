@@ -393,12 +393,14 @@ export const openApiDoc = {
           title: { type: "string", maxLength: 512 },
           target: {
             type: "string",
-            enum: ["radarr", "sonarr", "lidarr", "manual"],
-            description: "Which *arr should adopt and import the download. `manual` means TorHQ owns it and no *arr will import it.",
+            enum: ["radarr", "sonarr", "lidarr", "qbittorrent", "games"],
+            description:
+              "Which *arr should adopt and import the download. `qbittorrent` (category `torhq-manual`) and " +
+              "`games` (category `torhq-games`) are raw downloads TorHQ owns; no *arr will import them.",
           },
           category: {
             type: "string",
-            enum: ["torhq-manual", "radarr", "sonarr", "lidarr"],
+            enum: ["torhq-manual", "torhq-games", "radarr", "sonarr", "lidarr"],
             description: "Legacy alias for `target`, expressed as the qBittorrent category.",
           },
         },
@@ -1049,6 +1051,65 @@ export const openApiDoc = {
               totalBytes: { type: "integer" }, freeBytes: { type: "integer" },
             } } },
           } } } } },
+        },
+      },
+    },
+    "/api/catalogue/sources": {
+      get: {
+        summary: "Which catalogue kinds (movie, tv, game) can be browsed, their lists, and the game platform filters",
+        description: "Film and TV come from TMDB, games from RAWG. A kind whose source has no API key is reported with the reason.",
+        security: [{ cookieAuth: [] }],
+        responses: { "200": { description: "OK" } },
+      },
+    },
+    "/api/catalogue/genres": {
+      get: {
+        summary: "Genres a kind can be filtered by (TMDB genre ids, or RAWG slugs for games)",
+        security: [{ cookieAuth: [] }],
+        parameters: [{ name: "kind", in: "query", required: true, schema: { type: "string", enum: ["movie", "tv", "game"] } }],
+        responses: {
+          "200": { description: "OK" },
+          "409": errorResponse("the source for this kind is not configured"),
+          "502": errorResponse("the source rejected the key or is unreachable"),
+        },
+      },
+    },
+    "/api/catalogue/browse": {
+      get: {
+        summary: "One page of a catalogue list, or of a title search when `q` is given",
+        description:
+          "Read-only. Movies and shows already in Radarr/Sonarr are marked `inLibrary` (`libraryChecked` is false " +
+          "when that could not be determined). A movie carries `selectionId` (`tmdb:<id>`), which the Get and " +
+          "Requests flows accept directly.",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "kind", in: "query", required: true, schema: { type: "string", enum: ["movie", "tv", "game"] } },
+          { name: "list", in: "query", schema: { type: "string", enum: ["trending", "popular", "top_rated", "upcoming", "now_playing", "on_the_air", "new"] } },
+          { name: "q", in: "query", schema: { type: "string", maxLength: 256 } },
+          { name: "genre", in: "query", schema: { type: "string" } },
+          { name: "platform", in: "query", schema: { type: "integer" }, description: "Games only: a RAWG parent-platform id." },
+          { name: "page", in: "query", schema: { type: "integer", minimum: 1, maximum: 500 } },
+        ],
+        responses: {
+          "200": { description: "OK" },
+          "400": errorResponse("invalid query, or a list that kind does not have"),
+          "409": errorResponse("the source for this kind is not configured"),
+          "502": errorResponse("the source rejected the key or is unreachable"),
+        },
+      },
+    },
+    "/api/catalogue/details": {
+      get: {
+        summary: "Full detail for one title, including a show's `tvdb:<id>` selection id",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "kind", in: "query", required: true, schema: { type: "string", enum: ["movie", "tv", "game"] } },
+          { name: "id", in: "query", required: true, schema: { type: "string", pattern: "^\\d+$" } },
+        ],
+        responses: {
+          "200": { description: "OK" },
+          "409": errorResponse("the source for this kind is not configured"),
+          "502": errorResponse("the source rejected the key or is unreachable"),
         },
       },
     },

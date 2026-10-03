@@ -21,6 +21,7 @@ export const NAV: Array<{ group: string; items: NavItem[] }> = [
   {
     group: "Acquire",
     items: [
+      { to: "/catalogue", label: "Catalogue", icon: "grid" },
       { to: "/get", label: "Get", icon: "plus", adminOnly: true },
       { to: "/search", label: "Raw search", icon: "search", adminOnly: true },
       { to: "/downloads", label: "Downloads", icon: "download" },

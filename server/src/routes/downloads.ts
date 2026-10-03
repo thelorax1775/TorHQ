@@ -32,7 +32,7 @@ const ACTIONS = [
 type Action = (typeof ACTIONS)[number];
 
 /** Categories TorHQ itself creates; others must already exist in qBittorrent. */
-const KNOWN_CATEGORIES = ["torhq-manual", ...ARR_SERVICES] as const;
+const KNOWN_CATEGORIES = ["torhq-manual", "torhq-games", ...ARR_SERVICES] as const;
 
 const ActionBody = z.object({
   hashes: z.array(z.string().regex(HASH_RE, "not a valid torrent hash")).min(1).max(200),
