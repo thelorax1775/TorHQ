@@ -25,3 +25,6 @@ libraries/
 
 # Local agent-tooling scratch, never part of the app
 .claude-flow/
+
+.swarm/
+ruvector.db

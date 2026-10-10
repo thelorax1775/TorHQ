@@ -8,7 +8,7 @@
 # your NAS. This is the correct pattern for unprivileged LXCs, which cannot
 # mount network filesystems themselves.
 #
-#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/TorHQ/main/scripts/mount-share.sh)"
+#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/torhq/main/scripts/mount-share.sh)"
 #
 # Interactive by default; drive it unattended with the TORHQ_* env vars below
 # plus TORHQ_NONINTERACTIVE=1. Self-contained — no third-party framework.

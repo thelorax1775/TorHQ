@@ -7,7 +7,7 @@
 # deletes the fstab entry and the SMB credentials file, and (optionally) removes
 # the now-empty mountpoint.
 #
-#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/TorHQ/main/scripts/unmount-share.sh)"
+#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/torhq/main/scripts/unmount-share.sh)"
 #
 # Interactive by default (pick from existing shares); or drive it with TORHQ_*.
 # ---------------------------------------------------------------------------
