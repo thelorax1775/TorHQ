@@ -6,7 +6,7 @@
 # Debian 12 LXC, then runs TorHQ's in-container installer inside it — so you go
 # from nothing to a running TorHQ at http://<container-ip>:8787 in one command.
 #
-#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/TorHQ/main/scripts/proxmox-install.sh)"
+#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/torhq/main/scripts/proxmox-install.sh)"
 #
 # By default it shows an interactive menu (like the community-scripts installers)
 # where you can accept sensible defaults or switch to Advanced and choose the

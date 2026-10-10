@@ -44,6 +44,7 @@ over your \*arr apps' pipelines.
 - [Security model](#security-model)
 - [API](#api)
 - [Project layout](#project-layout)
+- [Project status](#project-status)
 
 ---
 
@@ -434,7 +435,7 @@ Requires **Node 20+** (22 works). `better-sqlite3` is a native module, so a C
 toolchain is needed on first install (`build-essential python3` on Debian).
 
 ```bash
-git clone <repo> torhq && cd torhq
+git clone https://github.com/thelorax1775/torhq.git torhq && cd torhq
 npm install            # installs both workspaces from the committed lockfile
 
 # Minimal dev environment (loopback, an approved root you can write to):
@@ -716,7 +717,7 @@ Debian 12 container, installs TorHQ inside it, and starts it — no manual
 container setup:
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/TorHQ/main/scripts/proxmox-install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/torhq/main/scripts/proxmox-install.sh)"
 ```
 
 When it finishes it prints the container IP; open `http://<container-ip>:8787` and
@@ -732,7 +733,7 @@ export TORHQ_GIT_TOKEN=github_pat_xxxxxxxx
 bash -c "$(curl -fsSL \
   -H "Authorization: Bearer $TORHQ_GIT_TOKEN" \
   -H "Accept: application/vnd.github.raw" \
-  https://api.github.com/repos/thelorax1775/TorHQ/contents/scripts/proxmox-install.sh)"
+  https://api.github.com/repos/thelorax1775/torhq/contents/scripts/proxmox-install.sh)"
 ```
 
 The exported `TORHQ_GIT_TOKEN` is inherited by the script and used for the clone;
@@ -768,19 +769,12 @@ Example — a fixed IP and more resources:
 
 ```bash
 TORHQ_NET=192.168.1.50/24 TORHQ_GW=192.168.1.1 TORHQ_RAM=4096 TORHQ_DISK=16 \
-  bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/TorHQ/main/scripts/proxmox-install.sh)"
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/torhq/main/scripts/proxmox-install.sh)"
 ```
 
 > The installer binds TorHQ to `0.0.0.0` so it's reachable on your LAN at the
 > container IP. To expose it beyond the LAN, front it with the nginx TLS reverse
 > proxy below and set `TORHQ_TRUST_PROXY`/`TORHQ_COOKIE_SECURE`.
-
-> **Before PR #3 is merged**, install from the feature branch by also fetching the
-> script from it:
-> ```bash
-> TORHQ_BRANCH=claude/arr-stack-integration-9jtos4 \
->   bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/TorHQ/claude/arr-stack-integration-9jtos4/scripts/proxmox-install.sh)"
-> ```
 
 ### Mounting NFS/SMB shares (NAS storage for downloads)
 
@@ -794,7 +788,7 @@ The one-line installer above **offers to set up a share during provisioning**
 helper any time:
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/TorHQ/main/scripts/mount-share.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/torhq/main/scripts/mount-share.sh)"
 ```
 
 It prompts for the share type (NFS or SMB/CIFS), the remote path, SMB
@@ -814,7 +808,7 @@ Unattended example:
 TORHQ_SHARE_TYPE=nfs TORHQ_SHARE_REMOTE=192.168.1.10:/volume1/media \
 TORHQ_SHARE_NAME=media TORHQ_TARGET_CTID=105 TORHQ_CT_PATH=/mnt/media \
 TORHQ_NONINTERACTIVE=1 \
-  bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/TorHQ/main/scripts/mount-share.sh)"
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/torhq/main/scripts/mount-share.sh)"
 ```
 
 > For unprivileged containers you may need to set the mount's `uid`/`gid` to your
@@ -827,14 +821,14 @@ To remove a share cleanly (host unmount + fstab entry + container bind mount +
 SMB credentials), run the companion helper on the host:
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/TorHQ/main/scripts/unmount-share.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/thelorax1775/torhq/main/scripts/unmount-share.sh)"
 ```
 
 ### Manual install (inside an existing LXC)
 
 ```bash
 # Inside the LXC, as root:
-git clone <repo> /opt/torhq-src && cd /opt/torhq-src
+git clone https://github.com/thelorax1775/torhq.git /opt/torhq-src && cd /opt/torhq-src
 ./scripts/install.sh
 ```
 
@@ -965,6 +959,16 @@ docs/              API curl examples + the revamp contract
 
 ---
 
+## Project status
+
+Active. Single-maintainer homelab project, developed and deployed on a Proxmox
+LXC. Recent work covers the Catalogue (TMDB/RAWG), admin and member accounts,
+and self-update from GitHub. The Vitest suite covers the server; the web UI has
+no automated tests. Integrations are only as verified as the services they were
+tested against, so treat any adapter you have not run yourself as unverified.
+
+---
+
 ## License
 
-MIT. See [`package.json`](package.json).
+`package.json` declares MIT, but no `LICENSE` file is committed yet.
